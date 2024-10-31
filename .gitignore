@@ -1,0 +1,5 @@
+# Ignorar archivo específico de configuración
+config.py
+
+# Ignorar carpeta de excels exports y todo su contenido
+excel_exports/
