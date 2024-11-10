@@ -548,15 +548,15 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
     try:
         # 1. Exportar Órdenes con segmentaciones
-        if 'ordenes' in dataframes and 'ordenes_completadas' in dataframes:
-            filename = f'ordenes_segmentadas.xlsx'
+        if 'ordenes_display' in dataframes and 'ordenes_completadas_display' in dataframes:
+            filename = f'ordenes_segmentadas{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 # Hoja 1: Órdenes
-                dataframes['ordenes'].to_excel(writer, index=False, sheet_name='Órdenes')
+                dataframes['ordenes_display'].to_excel(writer, index=False, sheet_name='Órdenes')
 
                 # Hoja 2: Órdenes Completadas
-                dataframes['ordenes_completadas'].to_excel(writer, index=False, sheet_name='Órdenes Completadas')
+                dataframes['ordenes_completadas_display'].to_excel(writer, index=False, sheet_name='Órdenes Completadas')
 
                 # Hoja 3: Volumen de pedidos por fecha
                 if 'df_count' in dataframes:
@@ -582,34 +582,31 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 2. Exportar Detalle de Productos
         if 'products' in dataframes:
-            filename = f'detalle_productos.xlsx'
+            filename = f'detalle_productos{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 dataframes['products'].to_excel(writer, index=False, sheet_name='Detalle de Productos')
-
             generated_files['productos'] = excel_path
 
         # 3. Exportar Usuarios App
         if 'usuarios_app' in dataframes:
-            filename = f'usuarios_app.xlsx'
+            filename = f'usuarios_app{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 dataframes['usuarios_app'].to_excel(writer, index=False, sheet_name='Usuarios_App')
-
             generated_files['usuarios_app'] = excel_path
 
         # 4. Exportar Usuarios
         if 'usuarios' in dataframes:
-            filename = f'usuarios.xlsx'
+            filename = f'usuarios{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 dataframes['usuarios'].to_excel(writer, index=False, sheet_name='Usuarios')
-
             generated_files['usuarios'] = excel_path
 
         # 5. Exportar Resumen de Cafeterías
         if 'cafeterias' in dataframes:
-            filename = f'{current_month}WompiCafeterias.xlsx'
+            filename = f'{current_month}WompiCafeterias{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
 
             df_cafeterias = dataframes.get('cafeterias', pd.DataFrame())
@@ -623,7 +620,6 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                     worksheet = writer.sheets['Resumen Cafeterías']
                     money_format = workbook.add_format({'num_format': '$#,##0.000'})
 
-                    # Asumiendo que las columnas de monto están en B, D, E, F, G
                     # Ajusta las columnas según el orden final del DataFrame
                     # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR NETO, Total 2.5% TOMADO, Total VALOR DISPERSIÓN FINAL
                     # Índices Excel: A, B, C, D, E, F, G
@@ -635,7 +631,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 6. Exportar Ingredientes
         if 'ingredientes' in dataframes:
-            filename = f'ingredientes.xlsx'
+            filename = f'ingredientes{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             df_ingredientes = dataframes['ingredientes']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
@@ -652,7 +648,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 7. Exportar Instituciones
         if 'instituciones' in dataframes:
-            filename = f'instituciones.xlsx'
+            filename = f'instituciones{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             df_instituciones = dataframes['instituciones']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
@@ -667,7 +663,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 8. Exportar Productos
         if 'productos' in dataframes:
-            filename = f'productos.xlsx'
+            filename = f'productos{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             df_productos = dataframes['productos']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
@@ -1120,8 +1116,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                             ),
                             dash_table.DataTable(
                                 id='ordenes-table_1',
-                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes', pd.DataFrame()).columns],
-                                data=dataframes.get('ordenes', pd.DataFrame()).to_dict('records'),
+                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes_display', pd.DataFrame()).columns],
+                                data=dataframes.get('ordenes_display', pd.DataFrame()).to_dict('records'),
                                 page_size=10,
                                 sort_action='native',
                                 sort_mode='multi',
@@ -1138,7 +1134,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                         'if': {'column_id': col},
                                         'format': {'specifier': '.3f'}
                                     } for col in ['VALOR COMISION', 'VALOR RETEFUENTE', 'VALOR RTE ICA', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
-                                    if col in dataframes.get('ordenes', pd.DataFrame()).columns
+                                    if col in dataframes.get('ordenes_display', pd.DataFrame()).columns
                                 ]
                             ),
                             html.Button("Descargar Órdenes a Excel", id="btn-download-ordenes", n_clicks=0),
@@ -1156,8 +1152,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                             ),
                             dash_table.DataTable(
                                 id='ordenes-completadas-table',
-                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes_completadas', pd.DataFrame()).columns],
-                                data=dataframes.get('ordenes_completadas', pd.DataFrame()).to_dict('records'),
+                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes_completadas_display', pd.DataFrame()).columns],
+                                data=dataframes.get('ordenes_completadas_display', pd.DataFrame()).to_dict('records'),
                                 page_size=10,
                                 sort_action='native',
                                 sort_mode='multi',
@@ -1174,7 +1170,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                         'if': {'column_id': col},
                                         'format': {'specifier': '.3f'}
                                     } for col in ['VALOR COMISION', 'VALOR RETEFUENTE', 'VALOR RTE ICA', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
-                                    if col in dataframes.get('ordenes_completadas', pd.DataFrame()).columns
+                                    if col in dataframes.get('ordenes_completadas_display', pd.DataFrame()).columns
                                 ]
                             ),
                             html.Button("Descargar Órdenes Completadas a Excel", id="btn-download-ordenes-completadas", n_clicks=0),
@@ -1457,7 +1453,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         [Input('search-ordenes', 'value')]
     )
     def update_ordenes_table(search_value):
-        filtered_df = filter_dataframe(dataframes.get('ordenes', pd.DataFrame()), search_value)
+        filtered_df = filter_dataframe(dataframes.get('ordenes_display', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
     # Callback para filtrar Órdenes Completadas
@@ -1466,7 +1462,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         [Input('search-ordenes-completadas', 'value')]
     )
     def update_ordenes_completadas_table(search_value):
-        filtered_df = filter_dataframe(dataframes.get('ordenes_completadas', pd.DataFrame()), search_value)
+        filtered_df = filter_dataframe(dataframes.get('ordenes_completadas_display', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
     # Callback para filtrar Productos (Tabla de Productos)
@@ -1562,10 +1558,10 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 # Hoja 1: Órdenes
-                dataframes.get('ordenes', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Órdenes')
+                dataframes.get('ordenes_display', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Órdenes')
 
                 # Hoja 2: Órdenes Completadas
-                dataframes.get('ordenes_completadas', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Órdenes Completadas')
+                dataframes.get('ordenes_completadas_display', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Órdenes Completadas')
 
                 # Hoja 3: Volumen de pedidos por fecha
                 if 'df_count' in dataframes:
@@ -1674,13 +1670,13 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 worksheet = writer.sheets['Resumen Cafeterías']
                 money_format = workbook.add_format({'num_format': '$#,##0.000'})
 
-                # Asumiendo que las columnas de monto están en B, D, E, F, G, H
+                # Asumiendo que las columnas de monto están en B, C, D, E, F, G
                 # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR NETO, Total 2.5% TOMADO, Total VALOR DISPERSIÓN FINAL
                 # Índices Excel: A, B, C, D, E, F, G
                 worksheet.set_column('B:G', 20, money_format)
 
             buffer.seek(0)
-            return dcc.send_bytes(buffer.read(), f"{current_month}WompiCafeterias.xlsx")
+            return dcc.send_bytes(buffer.read(), f"Resumen_Cafeterias.xlsx")
 
     # Callback para descargar Ingredientes
     @app.callback(
@@ -1780,7 +1776,7 @@ def main():
     figures_and_data = create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, df_usuarios_app, df_instituciones)
 
     # Crear un diccionario de dataframes
-    dataframes = {
+    dataframes_dict = {
         'ordenes': df_ordenes,  # Todas las órdenes
         'ordenes_completadas': df_ordenes_completadas,  # Solo órdenes completadas
         'products': df_products,
@@ -1792,18 +1788,42 @@ def main():
         'productos': df_productos
     }
 
+    # Crear DataFrames de visualización excluyendo columnas desde 'hora_recogida_str' hasta el final
+    display_columns = [
+        'id_orden',
+        'documento_cliente',
+        'nombre_cliente',
+        'fecha_creacion_str',
+        'hora_creacion',
+        'monto',
+        'VALOR COMISION',
+        'VALOR RETEFUENTE',
+        'VALOR RTE ICA',
+        'VALOR NETO',
+        '2.5% TOMADO',
+        'VALOR DISPERSIÓN FINAL',
+        'tasa',
+        'cafeteria',
+        'orden_completada'
+    ]
+
+    df_ordenes_display = df_ordenes[display_columns].copy()
+    df_ordenes_completadas_display = df_ordenes_completadas[display_columns].copy()
+
+    # Añadir dataframes de visualización al diccionario
+    dataframes_dict['ordenes_display'] = df_ordenes_display
+    dataframes_dict['ordenes_completadas_display'] = df_ordenes_completadas_display
+
     # Añadir dataframes adicionales de figures_and_data
     for key, value in figures_and_data.items():
-        if key.startswith('df_'):
-            dataframes[key] = value
-        elif key.startswith('fig_'):
-            dataframes[key] = value
+        if key.startswith('df_') or key.startswith('fig_'):
+            dataframes_dict[key] = value
 
     # Configurar la aplicación Dash
-    app = setup_dash_app_integrado(figures_and_data, dataframes)
+    app = setup_dash_app_integrado(figures_and_data, dataframes_dict)
 
     # Exportar todos los Excel antes de iniciar la aplicación
-    exportar_a_excel_integrado(dataframes)
+    exportar_a_excel_integrado(dataframes_dict)
 
     # Ejecutar la conversión completa si es necesario (función del primer script)
     convertir_completo()
@@ -1814,5 +1834,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-#INFO UTILIZATION
