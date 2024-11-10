@@ -167,6 +167,20 @@ def process_ordenes_data(df_ordenes):
         df_ordenes['fecha_terminacion_str'] = df_ordenes['fecha_terminacion_dt'].dt.strftime('%d/%m/%Y')
         df_ordenes['hora_recogida_str'] = df_ordenes['hora_recogida_dt'].astype(str)
 
+        # Añadir nuevas columnas
+        df_ordenes['VALOR COMISION'] = (df_ordenes['monto'] * 0.02).round(3)
+        df_ordenes['VALOR RETEFUENTE'] = (df_ordenes['monto'] * 0.015).round(3)
+        df_ordenes['VALOR RTE ICA'] = (df_ordenes['monto'] * 0.005).round(3)
+
+        # Añadir VALOR NETO
+        df_ordenes['VALOR NETO'] = (df_ordenes['monto'] - df_ordenes['VALOR COMISION'] - df_ordenes['VALOR RETEFUENTE'] - df_ordenes['VALOR RTE ICA']).round(3)
+
+        # Añadir 2.5% TOMADO
+        df_ordenes['2.5% TOMADO'] = (df_ordenes['VALOR NETO'] * 0.025).round(3)
+
+        # Añadir VALOR DISPERSIÓN FINAL
+        df_ordenes['VALOR DISPERSIÓN FINAL'] = (df_ordenes['VALOR NETO'] - df_ordenes['2.5% TOMADO']).round(3)
+
         # Ordenar el DataFrame por 'fecha_creacion_dt' y 'hora_recogida_dt'
         df_ordenes = df_ordenes.sort_values(by=['fecha_creacion_dt', 'hora_recogida_dt'], ascending=[False, False])
 
@@ -178,6 +192,12 @@ def process_ordenes_data(df_ordenes):
             'fecha_creacion_str',    # Usar la cadena formateada
             'hora_creacion',         # Ya existe
             'monto',
+            'VALOR COMISION',        # Nueva columna
+            'VALOR RETEFUENTE',      # Nueva columna
+            'VALOR RTE ICA',         # Nueva columna
+            'VALOR NETO',            # Nueva columna
+            '2.5% TOMADO',           # Nueva columna
+            'VALOR DISPERSIÓN FINAL',# Nueva columna
             'tasa',
             'cafeteria',
             'orden_completada',
@@ -208,7 +228,7 @@ def process_products_data(df_ordenes):
     """
     if not df_ordenes.empty:
         # Procesar 'productos_json' para extraer las llaves requeridas
-        df_ordenes_2 = df_ordenes[['id_orden', 'nombre_cliente', 'productos_json', 'fecha_creacion_str', 'hora_creacion', 'monto']].copy()
+        df_ordenes_2 = df_ordenes[['id_orden', 'nombre_cliente', 'productos_json', 'fecha_creacion_str', 'hora_creacion', 'monto', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']].copy()
 
         # Definir una función segura para cargar JSON
         def safe_json_loads(x):
@@ -241,11 +261,11 @@ def process_products_data(df_ordenes):
 
         # Convertir columnas numéricas - usando los nombres correctos del JSON
         df_products['cantidad'] = pd.to_numeric(df_products['cantidad'], errors='coerce').fillna(0).astype(int)
-        df_products['precioUnitario'] = pd.to_numeric(df_products['precioUnitario'], errors='coerce').fillna(0)
-        df_products['precioTotal'] = pd.to_numeric(df_products['precioTotal'], errors='coerce').fillna(0)
+        df_products['precioUnitario'] = pd.to_numeric(df_products['precioUnitario'], errors='coerce').fillna(0).round(3)
+        df_products['precioTotal'] = pd.to_numeric(df_products['precioTotal'], errors='coerce').fillna(0).round(3)
 
         # Reordenar columnas según lo especificado, incluyendo 'id_orden'
-        desired_product_columns = ['id_orden', 'nombre_cliente', 'producto', 'cantidad', 'precioUnitario', 'precioTotal', 'fecha_creacion_str', 'hora_creacion', 'monto']
+        desired_product_columns = ['id_orden', 'nombre_cliente', 'producto', 'cantidad', 'precioUnitario', 'precioTotal', 'fecha_creacion_str', 'hora_creacion', 'monto', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
         df_products = df_products[desired_product_columns]
 
     return df_products
@@ -258,7 +278,7 @@ def process_cafeterias_data(df_ordenes_completadas):
         df_ordenes_completadas (pd.DataFrame): DataFrame de órdenes completadas.
 
     Returns:
-        pd.DataFrame: DataFrame con el resumen por cafeterías
+        pd.DataFrame: DataFrame con el resumen por cafeterías incluyendo nuevas columnas agregadas.
     """
     print("\nIniciando procesamiento de cafeterías...")
 
@@ -302,10 +322,13 @@ def process_cafeterias_data(df_ordenes_completadas):
     df_octubre['monto'] = pd.to_numeric(df_octubre['monto'], errors='coerce')
     df_octubre['tasa'] = pd.to_numeric(df_octubre['tasa'], errors='coerce')
 
-    # 6. Agrupar por cafetería y calcular totales
+    # 6. Agrupar por cafetería y calcular totales, incluyendo nuevas columnas
     df_cafeterias = df_octubre.groupby('cafeteria').agg({
         'monto': 'sum',
-        'tasa': 'sum'
+        'tasa': 'sum',
+        'VALOR NETO': 'sum',
+        '2.5% TOMADO': 'sum',
+        'VALOR DISPERSIÓN FINAL': 'sum'
     }).reset_index()
 
     # 7. Calcular monto sin tasa
@@ -319,6 +342,9 @@ def process_cafeterias_data(df_ordenes_completadas):
         'cafeteria': ['Total  (Órdenes Completadas)'],
         'monto': [df_cafeterias['monto'].sum()],
         'tasa': [df_cafeterias['tasa'].sum()],
+        'VALOR NETO': [df_cafeterias['VALOR NETO'].sum()],
+        '2.5% TOMADO': [df_cafeterias['2.5% TOMADO'].sum()],
+        'VALOR DISPERSIÓN FINAL': [df_cafeterias['VALOR DISPERSIÓN FINAL'].sum()],
         'monto_sin_tasa': [df_cafeterias['monto_sin_tasa'].sum()]
     })
 
@@ -328,15 +354,23 @@ def process_cafeterias_data(df_ordenes_completadas):
     df_cafeterias = df_cafeterias.rename(columns={
         'cafeteria': 'Cafeterias',
         'monto': 'Monto con Tasa',
-        'monto_sin_tasa': 'Monto sin Tasa'
+        'tasa': 'Tasa Total',
+        'monto_sin_tasa': 'Monto sin Tasa',
+        'VALOR NETO': 'Total VALOR NETO',
+        '2.5% TOMADO': 'Total 2.5% TOMADO',
+        'VALOR DISPERSIÓN FINAL': 'Total VALOR DISPERSIÓN FINAL'
     })
 
     # 11. Seleccionar y reordenar columnas finales
-    df_cafeterias = df_cafeterias[['Cafeterias', 'Monto con Tasa', 'Monto sin Tasa']]
+    df_cafeterias = df_cafeterias[['Cafeterias', 'Monto con Tasa', 'Tasa Total', 'Monto sin Tasa', 'Total VALOR NETO', 'Total 2.5% TOMADO', 'Total VALOR DISPERSIÓN FINAL']]
 
-    # 12. Redondear los valores numéricos
-    df_cafeterias['Monto con Tasa'] = df_cafeterias['Monto con Tasa'].round(0)
-    df_cafeterias['Monto sin Tasa'] = df_cafeterias['Monto sin Tasa'].round(0)
+    # 12. Redondear los valores numéricos a 3 decimales
+    df_cafeterias['Monto con Tasa'] = df_cafeterias['Monto con Tasa'].round(3)
+    df_cafeterias['Tasa Total'] = df_cafeterias['Tasa Total'].round(3)
+    df_cafeterias['Monto sin Tasa'] = df_cafeterias['Monto sin Tasa'].round(3)
+    df_cafeterias['Total VALOR NETO'] = df_cafeterias['Total VALOR NETO'].round(3)
+    df_cafeterias['Total 2.5% TOMADO'] = df_cafeterias['Total 2.5% TOMADO'].round(3)
+    df_cafeterias['Total VALOR DISPERSIÓN FINAL'] = df_cafeterias['Total VALOR DISPERSIÓN FINAL'].round(3)
 
     print("\nResumen final de cafeterías (solo órdenes completadas):")
     print(df_cafeterias)
@@ -393,7 +427,7 @@ def procesar_ingredientes(df_ingredientes):
             max_opciones = df_ingredientes['opciones'].apply(lambda x: len(x) if isinstance(x, list) else 0).max()
             for i in range(max_opciones):
                 df_ingredientes[f'opcion_{i+1}_precio'] = df_ingredientes['opciones'].apply(
-                    lambda x: x[i]['precio'] if isinstance(x, list) and len(x) > i else None
+                    lambda x: round(x[i]['precio'], 3) if isinstance(x, list) and len(x) > i else None
                 )
                 df_ingredientes[f'opcion_{i+1}_ingrediente'] = df_ingredientes['opciones'].apply(
                     lambda x: x[i]['ingrediente'] if isinstance(x, list) and len(x) > i else None
@@ -587,8 +621,13 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                     # Formatear las columnas de monto
                     workbook = writer.book
                     worksheet = writer.sheets['Resumen Cafeterías']
-                    money_format = workbook.add_format({'num_format': '$#,##0'})
-                    worksheet.set_column('B:C', 20, money_format)  # Asumiendo que las columnas de monto están en B y C
+                    money_format = workbook.add_format({'num_format': '$#,##0.000'})
+
+                    # Asumiendo que las columnas de monto están en B, D, E, F, G
+                    # Ajusta las columnas según el orden final del DataFrame
+                    # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR NETO, Total 2.5% TOMADO, Total VALOR DISPERSIÓN FINAL
+                    # Índices Excel: A, B, C, D, E, F, G
+                    worksheet.set_column('B:G', 20, money_format)
 
                 generated_files['cafeterias'] = excel_path
             else:
@@ -639,9 +678,9 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                 estadisticas_productos = pd.DataFrame({
                     'Total Productos': [len(df_productos)],
                     'Productos con Stock': [(df_productos['cantidad_disponible'] > 0).sum()],
-                    'Precio Promedio': [df_productos['precio_unitario'].mean()],
-                    'Precio Máximo': [df_productos['precio_unitario'].max()],
-                    'Precio Mínimo': [df_productos['precio_unitario'].min()]
+                    'Precio Promedio': [df_productos['precio_unitario'].mean().round(3)],
+                    'Precio Máximo': [df_productos['precio_unitario'].max().round(3)],
+                    'Precio Mínimo': [df_productos['precio_unitario'].min().round(3)]
                 })
                 estadisticas_productos.to_excel(writer, sheet_name='Estadísticas', index=False)
 
@@ -1093,6 +1132,14 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                     'width': '200px',
                                     'maxWidth': '250px',
                                 },
+                                # Formatear columnas numéricas para mostrar 3 decimales
+                                style_data_conditional=[
+                                    {
+                                        'if': {'column_id': col},
+                                        'format': {'specifier': '.3f'}
+                                    } for col in ['VALOR COMISION', 'VALOR RETEFUENTE', 'VALOR RTE ICA', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
+                                    if col in dataframes.get('ordenes', pd.DataFrame()).columns
+                                ]
                             ),
                             html.Button("Descargar Órdenes a Excel", id="btn-download-ordenes", n_clicks=0),
                             dcc.Download(id="download-ordenes"),
@@ -1121,6 +1168,14 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                     'width': '200px',
                                     'maxWidth': '250px',
                                 },
+                                # Formatear columnas numéricas para mostrar 3 decimales
+                                style_data_conditional=[
+                                    {
+                                        'if': {'column_id': col},
+                                        'format': {'specifier': '.3f'}
+                                    } for col in ['VALOR COMISION', 'VALOR RETEFUENTE', 'VALOR RTE ICA', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
+                                    if col in dataframes.get('ordenes_completadas', pd.DataFrame()).columns
+                                ]
                             ),
                             html.Button("Descargar Órdenes Completadas a Excel", id="btn-download-ordenes-completadas", n_clicks=0),
                             dcc.Download(id="download-ordenes-completadas"),
@@ -1281,12 +1336,17 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                         sort_action='native',
                         sort_mode='multi',
                         style_table={'overflowX': 'auto'},
-                        style_cell={
-                            'textAlign': 'left',
-                            'minWidth': '150px',
-                            'width': '200px',
-                            'maxWidth': '250px',
-                        },
+                        style_cell=estilo_celda,
+                        style_header=estilo_header,
+                        style_data=estilo_datos,
+                        # Formatear columnas numéricas para mostrar 3 decimales
+                        style_data_conditional=[
+                            {
+                                'if': {'column_id': col},
+                                'format': {'specifier': '.3f'}
+                            } for col in ['Monto con Tasa', 'Tasa Total', 'Monto sin Tasa', 'Total VALOR NETO', 'Total 2.5% TOMADO', 'Total VALOR DISPERSIÓN FINAL']
+                            if col in dataframes.get('cafeterias', pd.DataFrame()).columns
+                        ]
                     ),
                     html.Button("Descargar Resumen de Cafeterías a Excel", id="btn-download-cafeterias", n_clicks=0),
                     dcc.Download(id="download-cafeterias"),
@@ -1561,9 +1621,9 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 estadisticas_productos = pd.DataFrame({
                     'Total Productos': [len(df_productos)],
                     'Productos con Stock': [(df_productos['cantidad_disponible'] > 0).sum()],
-                    'Precio Promedio': [df_productos['precio_unitario'].mean()],
-                    'Precio Máximo': [df_productos['precio_unitario'].max()],
-                    'Precio Mínimo': [df_productos['precio_unitario'].min()]
+                    'Precio Promedio': [df_productos['precio_unitario'].mean().round(3)],
+                    'Precio Máximo': [df_productos['precio_unitario'].max().round(3)],
+                    'Precio Mínimo': [df_productos['precio_unitario'].min().round(3)]
                 })
                 estadisticas_productos.to_excel(writer, sheet_name='Estadísticas', index=False)
             buffer.seek(0)
@@ -1607,9 +1667,20 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks > 0:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                dataframes.get('cafeterias', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Resumen Cafeterias')
+                dataframes.get('cafeterias', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Resumen Cafeterías')
+
+                # Formatear las columnas de monto
+                workbook = writer.book
+                worksheet = writer.sheets['Resumen Cafeterías']
+                money_format = workbook.add_format({'num_format': '$#,##0.000'})
+
+                # Asumiendo que las columnas de monto están en B, D, E, F, G, H
+                # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR NETO, Total 2.5% TOMADO, Total VALOR DISPERSIÓN FINAL
+                # Índices Excel: A, B, C, D, E, F, G
+                worksheet.set_column('B:G', 20, money_format)
+
             buffer.seek(0)
-            return dcc.send_bytes(buffer.read(), "Resumen_Cafeterias.xlsx")
+            return dcc.send_bytes(buffer.read(), f"{current_month}WompiCafeterias.xlsx")
 
     # Callback para descargar Ingredientes
     @app.callback(
