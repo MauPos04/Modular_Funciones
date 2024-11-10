@@ -549,7 +549,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
     try:
         # 1. Exportar Órdenes con segmentaciones
         if 'ordenes_display' in dataframes and 'ordenes_completadas_display' in dataframes:
-            filename = f'ordenes_segmentadas{time_suffix}.xlsx'
+            filename = f'ordenes_segmentadas.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 # Hoja 1: Órdenes
@@ -582,7 +582,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 2. Exportar Detalle de Productos
         if 'products' in dataframes:
-            filename = f'detalle_productos{time_suffix}.xlsx'
+            filename = f'detalle_productos.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 dataframes['products'].to_excel(writer, index=False, sheet_name='Detalle de Productos')
@@ -590,7 +590,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 3. Exportar Usuarios App
         if 'usuarios_app' in dataframes:
-            filename = f'usuarios_app{time_suffix}.xlsx'
+            filename = f'usuarios_app.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 dataframes['usuarios_app'].to_excel(writer, index=False, sheet_name='Usuarios_App')
@@ -598,7 +598,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 4. Exportar Usuarios
         if 'usuarios' in dataframes:
-            filename = f'usuarios{time_suffix}.xlsx'
+            filename = f'usuarios.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 dataframes['usuarios'].to_excel(writer, index=False, sheet_name='Usuarios')
@@ -606,7 +606,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 5. Exportar Resumen de Cafeterías
         if 'cafeterias' in dataframes:
-            filename = f'{current_month}WompiCafeterias{time_suffix}.xlsx'
+            filename = f'{current_month}WompiCafeterias.xlsx'
             excel_path = os.path.join(output_dir, filename)
 
             df_cafeterias = dataframes.get('cafeterias', pd.DataFrame())
@@ -631,7 +631,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 6. Exportar Ingredientes
         if 'ingredientes' in dataframes:
-            filename = f'ingredientes{time_suffix}.xlsx'
+            filename = f'ingredientes.xlsx'
             excel_path = os.path.join(output_dir, filename)
             df_ingredientes = dataframes['ingredientes']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
@@ -648,7 +648,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 7. Exportar Instituciones
         if 'instituciones' in dataframes:
-            filename = f'instituciones{time_suffix}.xlsx'
+            filename = f'instituciones.xlsx'
             excel_path = os.path.join(output_dir, filename)
             df_instituciones = dataframes['instituciones']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
@@ -663,7 +663,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 8. Exportar Productos
         if 'productos' in dataframes:
-            filename = f'productos{time_suffix}.xlsx'
+            filename = f'productos.xlsx'
             excel_path = os.path.join(output_dir, filename)
             df_productos = dataframes['productos']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
