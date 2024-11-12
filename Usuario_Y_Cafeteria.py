@@ -682,6 +682,15 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
             generated_files['productos'] = excel_path
 
+        # 9. Exportar Cafeterias Raw (Renombrado a cafeterias_db)
+        if 'cafeterias_raw' in dataframes:
+            filename = f'cafeterias_db.xlsx'
+            excel_path = os.path.join(output_dir, filename)
+            df_cafeterias_raw = dataframes['cafeterias_raw']
+            with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+                df_cafeterias_raw.to_excel(writer, index=False, sheet_name='Cafeterias Raw')
+            generated_files['cafeterias_raw'] = excel_path
+
         print("\nArchivos Excel generados exitosamente:")
         for clave, ruta in generated_files.items():
             print(f"- {clave}: {ruta}")
@@ -1349,7 +1358,36 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 ])
             ]),
 
-            # Pestaña 6: Ingredientes (del segundo script)
+            # Pestaña 6: Cafeterías (Renombrada a cafeterias_db)
+            dcc.Tab(label='Cafeterías', children=[
+                html.Div([
+                    dcc.Input(
+                        id='search-cafeterias-db',
+                        type='text',
+                        placeholder='Búsqueda global en cafeterías (db)...',
+                        style={'width': '100%', 'marginBottom': '10px', 'marginTop': '10px', 'padding': '8px'}
+                    ),
+                    dash_table.DataTable(
+                        id='cafeterias_db_table',
+                        columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('cafeterias_raw', pd.DataFrame()).columns],
+                        data=dataframes.get('cafeterias_raw', pd.DataFrame()).to_dict('records'),
+                        page_size=10,
+                        sort_action='native',
+                        sort_mode='multi',
+                        style_table={'overflowX': 'auto'},
+                        style_cell={
+                            'textAlign': 'left',
+                            'minWidth': '150px',
+                            'width': '200px',
+                            'maxWidth': '250px',
+                        },
+                    ),
+                    html.Button("Descargar Cafeterías DB a Excel", id="btn-download-cafeterias-db", n_clicks=0),
+                    dcc.Download(id="download-cafeterias-db"),
+                ])
+            ]),
+
+            # Pestaña 7: Ingredientes (del segundo script)
             dcc.Tab(label='Ingredientes', children=[
                 html.Div([
                     dcc.Input(
@@ -1375,7 +1413,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 ])
             ]),
 
-            # Pestaña 7: Instituciones (del segundo script)
+            # Pestaña 8: Instituciones (del segundo script)
             dcc.Tab(label='Instituciones', children=[
                 dcc.Tabs([
                     # Subpestaña Tabla de Datos
@@ -1415,7 +1453,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 ])
             ]),
 
-            # Pestaña 8: Productos (del segundo script y parte del primero)
+            # Pestaña 9: Productos (del segundo script y parte del primero)
             dcc.Tab(label='Productos', children=[
                 html.Div([
                     dcc.Input(
@@ -1492,13 +1530,22 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         filtered_df = filter_dataframe(dataframes.get('usuarios', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
-    # Callback para filtrar Cafeterías
+    # Callback para filtrar Resumen de Cafeterías
     @app.callback(
         Output('cafeterias-table', 'data'),
         [Input('search-cafeterias', 'value')]
     )
     def update_cafeterias_table(search_value):
         filtered_df = filter_dataframe(dataframes.get('cafeterias', pd.DataFrame()), search_value)
+        return filtered_df.to_dict('records')
+
+    # Callback para filtrar Cafeterías DB (renombrado)
+    @app.callback(
+        Output('cafeterias_db_table', 'data'),
+        [Input('search-cafeterias-db', 'value')]
+    )
+    def update_cafeterias_db_table(search_value):
+        filtered_df = filter_dataframe(dataframes.get('cafeterias_raw', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
     # Callback para filtrar Ingredientes
@@ -1678,6 +1725,21 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), f"Resumen_Cafeterias.xlsx")
 
+    # Callback para descargar Cafeterías DB
+    @app.callback(
+        Output("download-cafeterias-db", "data"),
+        Input("btn-download-cafeterias-db", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def download_cafeterias_db(n_clicks):
+        if n_clicks > 0:
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                df_cafeterias_db = dataframes.get('cafeterias_raw', pd.DataFrame())
+                df_cafeterias_db.to_excel(writer, index=False, sheet_name='Cafeterias DB')
+            buffer.seek(0)
+            return dcc.send_bytes(buffer.read(), "cafeterias_db.xlsx")
+
     # Callback para descargar Ingredientes
     @app.callback(
         Output("descargar-ingredientes", "data"),
@@ -1785,7 +1847,8 @@ def main():
         'cafeterias': df_cafeterias_resumen,  # Resumen por cafeterías
         'ingredientes': df_ingredientes,
         'instituciones': df_instituciones,
-        'productos': df_productos
+        'productos': df_productos,
+        'cafeterias_raw': df_cafeterias  # Datos raw de cafeterías
     }
 
     # Crear DataFrames de visualización excluyendo columnas desde 'hora_recogida_str' hasta el final
