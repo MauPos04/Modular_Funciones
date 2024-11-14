@@ -1,3 +1,5 @@
+# main.py
+
 import boto3
 import pandas as pd
 import dash
@@ -19,6 +21,11 @@ import locale
 # Importaciones de módulos personalizados
 from config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY
 from Conversion import convertir_completo
+
+# Importar las nuevas funciones para exportar órdenes completadas filtradas
+from exceles_completados_filtrados import export_ordenes_completadas_por_mes, export_ordenes_completadas_rango_fecha
+from excel_clasificacion_cafeterias import export_ordenes_completadas_por_cafeteria
+
 
 # Ignorar FutureWarnings para aplicar cambios gradualmente
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -747,9 +754,6 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                     money_format = workbook.add_format({'num_format': '$#,##0.000'})
 
                     # Ajusta las columnas según el orden final del DataFrame
-                    # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR COMISION, ...
-                    # Índices Excel: B, C, D, E, F, G, ..., Q
-                    # Determinar el rango de columnas a formatear dinámicamente
                     for idx, col in enumerate(df_cafeterias.columns):
                         if col != 'Cafeterias':
                             worksheet.set_column(idx, idx, 20, money_format)
@@ -805,7 +809,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                 sheet_name = 'Análisis por Ciudad'
                 inst_stats = dataframes['instituciones'].groupby(['ciudad', 'is_active']).size().unstack(fill_value=0).reset_index()
                 inst_stats.to_excel(writer, index=False, sheet_name=sheet_name)
-                worksheet = writer.sheets[sheet_name]
+                worksheet = writer.sheets['Análisis por Ciudad']
                 num_rows, num_cols = inst_stats.shape
                 worksheet.add_table(0, 0, num_rows, num_cols - 1, {'columns': [{'header': col} for col in inst_stats.columns], 'name': 'TablaAnalisisCiudad', 'style': 'Table Style Medium 9'})
 
@@ -1943,17 +1947,18 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 money_format = workbook.add_format({'num_format': '$#,##0.000'})
 
                 # Ajusta las columnas según el orden final del DataFrame
-                # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR COMISION, ...
-                # Índices Excel: B, C, D, E, F, G, ..., Q
-                # Calcula el número de columnas
-                num_cols_excel = len(df_cafeterias.columns)
-                # Aplicar formato a todas las columnas excepto la primera
                 for idx, col in enumerate(df_cafeterias.columns):
                     if col != 'Cafeterias':
                         worksheet.set_column(idx, idx, 20, money_format)
 
             buffer.seek(0)
-            return dcc.send_bytes(buffer.read(), f"Resumen_Cafeterias_{dataframes.get('cafeterias').iloc[0]['Cafeterias'].split()[0]}.xlsx")
+            # Obtener el nombre del primer mes para el nombre del archivo
+            if not df_cafeterias.empty:
+                first_cafeteria = df_cafeterias.iloc[0]['Cafeterias']
+                first_month = first_cafeteria.split()[0]
+                return dcc.send_bytes(buffer.read(), f"Resumen_Cafeterias_{first_month}.xlsx")
+            else:
+                return dcc.send_bytes(buffer.read(), "Resumen_Cafeterias.xlsx")
 
     # Callback para descargar Cafeterías DB
     @app.callback(
@@ -2128,14 +2133,21 @@ def main():
         if key.startswith('df_') or key.startswith('fig_'):
             dataframes_dict[key] = value
 
-    # Configurar la aplicación Dash
-    app = setup_dash_app_integrado(figures_and_data, dataframes_dict)
-
     # Exportar todos los Excel antes de iniciar la aplicación
     exportar_a_excel_integrado(dataframes_dict)
 
+    # Llamar a las nuevas funciones para exportar órdenes completadas filtradas
+    export_ordenes_completadas_por_mes(df_ordenes_completadas)
+    export_ordenes_completadas_rango_fecha(df_ordenes_completadas)
+    
+    # **Nueva llamada para exportar órdenes clasificadas por cafeterías**
+    export_ordenes_completadas_por_cafeteria(df_ordenes_completadas)
+
     # Ejecutar la conversión completa si es necesario (función del primer script)
     convertir_completo()
+
+    # Configurar la aplicación Dash
+    app = setup_dash_app_integrado(figures_and_data, dataframes_dict)
 
     # Abrir el navegador automáticamente
     webbrowser.open('http://127.0.0.1:8050/')
