@@ -21,6 +21,7 @@ import locale
 # Importaciones de módulos personalizados
 from config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY
 from Conversion import convertir_completo
+from id_a_cafeteria import renombrar_hojas
 
 # Importar las nuevas funciones para exportar órdenes completadas filtradas
 from exceles_completados_filtrados import export_ordenes_completadas_por_mes, export_ordenes_completadas_rango_fecha
@@ -2152,6 +2153,7 @@ def main():
     # Abrir el navegador automáticamente
     webbrowser.open('http://127.0.0.1:8050/')
     app.run_server(debug=True, use_reloader=False)
+    renombrar_hojas()
 
 if __name__ == '__main__':
     main()
