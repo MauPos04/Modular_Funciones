@@ -1,6 +1,7 @@
 import pandas as pd
 from openpyxl import load_workbook
 import os
+from Eiminar_columnas_yAmarillo import eliminar_columnas_y_colorear   
 
 def renombrar_hojas():
     # Diccionario de correspondencia entre ID y nombre
@@ -60,12 +61,17 @@ def renombrar_hojas():
             # Guardar los datos filtrados de nuevo en el diccionario
             df[sheet_name] = data
     
-    # Guardar el archivo Excel con los cambios de fecha
-    with pd.ExcelWriter(ruta_archivo, engine='openpyxl') as writer:
+    # Guardar el archivo Excel con los cambios de fecha y formato de tabla
+    with pd.ExcelWriter(ruta_archivo, engine='xlsxwriter') as writer:
         for sheet_name, data in df.items():
             # Escribir cada hoja con los datos filtrados
             data.to_excel(writer, sheet_name=sheet_name, index=False)
-    
+            worksheet = writer.sheets[sheet_name]
+            num_rows, num_cols = data.shape
+            
+            # Aplicar formato de tabla
+            worksheet.add_table(0, 0, num_rows, num_cols - 1, {'columns': [{'header': col} for col in data.columns], 'name': 'Tabla' + sheet_name, 'style': 'Table Style Medium 9'})
+
     # Cargar el archivo Excel con openpyxl para renombrar las hojas
     wb = load_workbook(ruta_archivo)
 
@@ -93,3 +99,4 @@ def renombrar_hojas():
 
 if __name__ == "__main__":
     renombrar_hojas()
+    
