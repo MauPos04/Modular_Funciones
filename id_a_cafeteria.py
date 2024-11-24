@@ -1,7 +1,7 @@
 import pandas as pd
 from openpyxl import load_workbook
 import os
-from Eiminar_columnas_yAmarillo import eliminar_columnas_y_colorear   
+
 
 def renombrar_hojas():
     # Diccionario de correspondencia entre ID y nombre
