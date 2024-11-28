@@ -1,3 +1,5 @@
+# Usuario_Y_Cafeteria.py
+
 import boto3
 import pandas as pd
 import dash
@@ -11,12 +13,29 @@ import json
 import numpy as np
 import os
 import openpyxl
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
+import warnings
+import locale
 
 # Importaciones de módulos personalizados
 from config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY
 from Conversion import convertir_completo
+from id_a_cafeteria import renombrar_hojas
+
+# Importar las nuevas funciones para exportar órdenes completadas filtradas
+from exceles_completados_filtrados import export_ordenes_completadas_por_mes, export_ordenes_completadas_rango_fecha
+from excel_clasificacion_cafeterias import export_ordenes_completadas_por_cafeteria
+
+# Ignorar FutureWarnings para aplicar cambios gradualmente
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+# Establecer el locale a español para obtener nombres de meses en español
+try:
+    locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
+except locale.Error:
+    # Si el locale no está disponible, usar el estándar
+    locale.setlocale(locale.LC_TIME, '')
 
 # ================================================
 # Configuración y Escaneo de AWS DynamoDB
@@ -89,7 +108,7 @@ def escanear_tabla(dynamodb, table_name, limit=None):
                 total_scanned += len(response.get('Items', []))
 
                 # Imprimir información de progreso
-                print(f"Escaneados {total_scanned} items de {table_name}")
+                print(f"Escaneados {len(response.get('Items', []))} items de {table_name}")
                 print(f"Capacidad consumida: {response.get('ConsumedCapacity', {}).get('CapacityUnits', 0)} unidades")
 
                 start_key = response.get('LastEvaluatedKey', None)
@@ -117,8 +136,6 @@ def escanear_tabla(dynamodb, table_name, limit=None):
 # Funciones de Procesamiento de Datos
 # ================================================
 
-# --- Funciones del primer script ---
-
 def filter_dataframe(df, search_term):
     """
     Filtra un DataFrame basado en un término de búsqueda global.
@@ -139,6 +156,25 @@ def filter_dataframe(df, search_term):
         return filtered_df
     return df
 
+def convertir_decimal(x):
+    """
+    Convierte objetos Decimal a float.
+
+    Args:
+        x (any): Valor a convertir.
+
+    Returns:
+        any: Valor convertido.
+    """
+    if isinstance(x, Decimal):
+        return float(x)
+    elif isinstance(x, list):
+        return [convertir_decimal(i) for i in x]
+    elif isinstance(x, dict):
+        return {k: convertir_decimal(v) for k, v in x.items()}
+    else:
+        return x
+
 def process_ordenes_data(df_ordenes):
     """
     Procesa el DataFrame de órdenes.
@@ -154,9 +190,9 @@ def process_ordenes_data(df_ordenes):
         df_ordenes['monto'] = pd.to_numeric(df_ordenes['monto'], errors='coerce')
         df_ordenes['tasa'] = pd.to_numeric(df_ordenes['tasa'], errors='coerce')
 
-        # Convertir columnas de fecha/hora a datetime
-        df_ordenes['fecha_creacion_dt'] = pd.to_datetime(df_ordenes['fecha_creacion'], errors='coerce', dayfirst=True)
-        df_ordenes['fecha_terminacion_dt'] = pd.to_datetime(df_ordenes['fecha_terminacion'], errors='coerce', dayfirst=True)
+        # Convertir columnas de fecha/hora a datetime sin especificar formato para inferencia automática
+        df_ordenes['fecha_creacion_dt'] = pd.to_datetime(df_ordenes['fecha_creacion'], errors='coerce')
+        df_ordenes['fecha_terminacion_dt'] = pd.to_datetime(df_ordenes['fecha_terminacion'], errors='coerce')
         df_ordenes['hora_recogida_dt'] = pd.to_datetime(df_ordenes['hora_recogida'], errors='coerce').dt.time
 
         # Crear columna 'hora_creacion' extrayendo la hora
@@ -167,19 +203,44 @@ def process_ordenes_data(df_ordenes):
         df_ordenes['fecha_terminacion_str'] = df_ordenes['fecha_terminacion_dt'].dt.strftime('%d/%m/%Y')
         df_ordenes['hora_recogida_str'] = df_ordenes['hora_recogida_dt'].astype(str)
 
-        # Añadir nuevas columnas
-        df_ordenes['VALOR COMISION'] = (df_ordenes['monto'] * 0.02).round(3)
-        df_ordenes['VALOR RETEFUENTE'] = (df_ordenes['monto'] * 0.015).round(3)
-        df_ordenes['VALOR RTE ICA'] = (df_ordenes['monto'] * 0.005).round(3)
+        # Añadir nuevas columnas según instrucciones
+        # Nuevas columnas basadas en 'monto'
+        df_ordenes['VALOR COMISION Monto'] = (df_ordenes['monto'] * 0.02).round(3)
+        df_ordenes['VALOR RETEFUENTE APPU Monto'] = (df_ordenes['monto'] * 0.015).round(3)
+        df_ordenes['VALOR RTE ICA APPU Monto'] = (df_ordenes['monto'] * 0.005).round(3)
+        df_ordenes['VALOR NETO Monto'] = (
+            df_ordenes['monto'] - 
+            df_ordenes['VALOR COMISION Monto'] - 
+            df_ordenes['VALOR RETEFUENTE APPU Monto'] - 
+            df_ordenes['VALOR RTE ICA APPU Monto']
+        ).round(3)
 
-        # Añadir VALOR NETO
-        df_ordenes['VALOR NETO'] = (df_ordenes['monto'] - df_ordenes['VALOR COMISION'] - df_ordenes['VALOR RETEFUENTE'] - df_ordenes['VALOR RTE ICA']).round(3)
+        # APPU (basado en 'tasa')
+        df_ordenes['VALOR COMISION APPU'] = (df_ordenes['tasa'] * 0.02).round(3)
+        df_ordenes['VALOR RETEFUENTE APPU'] = (df_ordenes['tasa'] * 0.015).round(3)
+        df_ordenes['VALOR RTE ICA APPU'] = (df_ordenes['tasa'] * 0.005).round(3)
 
-        # Añadir 2.5% TOMADO
-        df_ordenes['2.5% TOMADO'] = (df_ordenes['VALOR NETO'] * 0.025).round(3)
+        # CAFETERIA
+        df_ordenes['VALOR PRODUCTO'] = (df_ordenes['monto'] - df_ordenes['tasa']).round(3)
+        df_ordenes['VALOR COMISION CAFETERIA'] = (df_ordenes['VALOR PRODUCTO'] * 0.02).round(3)
+        df_ordenes['COMISION APPU-CAFETERIA'] = (df_ordenes['VALOR PRODUCTO'] * 0.005).round(3)
+        df_ordenes['COMISION-WOMPI'] = (df_ordenes['VALOR COMISION CAFETERIA'] + df_ordenes['COMISION APPU-CAFETERIA']).round(3)
+        df_ordenes['VALOR RETEFUENTE CAFETERIA'] = (df_ordenes['VALOR PRODUCTO'] * 0.015).round(3)
+        df_ordenes['VALOR RTE ICA CAFETERIA'] = (df_ordenes['VALOR PRODUCTO'] * 0.005).round(3)
+        df_ordenes['VALOR NETO CAFETERIA'] = (
+            df_ordenes['VALOR PRODUCTO'] - 
+            df_ordenes['COMISION-WOMPI'] - 
+            df_ordenes['VALOR RETEFUENTE CAFETERIA'] - 
+            df_ordenes['VALOR RTE ICA CAFETERIA']
+        ).round(3)
 
-        # Añadir VALOR DISPERSIÓN FINAL
-        df_ordenes['VALOR DISPERSIÓN FINAL'] = (df_ordenes['VALOR NETO'] - df_ordenes['2.5% TOMADO']).round(3)
+        df_ordenes['GANANCIA NETO APPU'] = (
+            df_ordenes['tasa'] - 
+            df_ordenes['VALOR COMISION APPU'] - 
+            df_ordenes['VALOR RETEFUENTE APPU'] - 
+            df_ordenes['VALOR RTE ICA APPU'] + 
+            df_ordenes['COMISION APPU-CAFETERIA']
+        ).round(3)
 
         # Ordenar el DataFrame por 'fecha_creacion_dt' y 'hora_recogida_dt'
         df_ordenes = df_ordenes.sort_values(by=['fecha_creacion_dt', 'hora_recogida_dt'], ascending=[False, False])
@@ -192,12 +253,21 @@ def process_ordenes_data(df_ordenes):
             'fecha_creacion_str',    # Usar la cadena formateada
             'hora_creacion',         # Ya existe
             'monto',
-            'VALOR COMISION',        # Nueva columna
-            'VALOR RETEFUENTE',      # Nueva columna
-            'VALOR RTE ICA',         # Nueva columna
-            'VALOR NETO',            # Nueva columna
-            '2.5% TOMADO',           # Nueva columna
-            'VALOR DISPERSIÓN FINAL',# Nueva columna
+            'VALOR COMISION Monto',                # Nueva columna
+            'VALOR RETEFUENTE APPU Monto',         # Nueva columna
+            'VALOR RTE ICA APPU Monto',            # Nueva columna
+            'VALOR NETO Monto',                    # Nueva columna
+            'VALOR COMISION APPU',
+            'VALOR RETEFUENTE APPU',
+            'VALOR RTE ICA APPU',
+            'GANANCIA NETO APPU',
+            'VALOR PRODUCTO',
+            'VALOR COMISION CAFETERIA',
+            'COMISION APPU-CAFETERIA',
+            'COMISION-WOMPI',
+            'VALOR RETEFUENTE CAFETERIA',
+            'VALOR RTE ICA CAFETERIA',
+            'VALOR NETO CAFETERIA',
             'tasa',
             'cafeteria',
             'orden_completada',
@@ -208,11 +278,31 @@ def process_ordenes_data(df_ordenes):
             'fecha_terminacion_str', # Usar la cadena formateada
             'celular_cliente',
             'comprobante_pago',
-            'observacion'
+            'observacion',
+            'cafeteria_id'  # Campo adicional requerido
+            # Añade aquí cualquier otro campo que desees mantener
         ]
+
+        # Verificar que todas las columnas existan
+        missing_columns = [col for col in desired_columns if col not in df_ordenes.columns]
+        if missing_columns:
+            print(f"Advertencia: Las siguientes columnas faltan en df_ordenes y se rellenarán con valores NaN: {missing_columns}")
+            for col in missing_columns:
+                df_ordenes[col] = np.nan
 
         # Reordenar las columnas del DataFrame según el orden deseado
         df_ordenes = df_ordenes[desired_columns]
+
+        # Convertir 'productos_json' a string para Dash DataTable, manejando Decimals
+        df_ordenes['productos_json'] = df_ordenes['productos_json'].apply(
+            lambda x: json.dumps(convertir_decimal(x)) if isinstance(x, (dict, list)) else str(x)
+        )
+
+        # **Nueva Conversión para la Columna 'observacion'**
+        # Asegurarse de que 'observacion' sea de tipo string, number o boolean
+        df_ordenes['observacion'] = df_ordenes['observacion'].apply(
+            lambda x: json.dumps(convertir_decimal(x)) if isinstance(x, (dict, list)) else (x if isinstance(x, (str, int, float, bool)) else str(x))
+        )
 
     return df_ordenes
 
@@ -228,7 +318,7 @@ def process_products_data(df_ordenes):
     """
     if not df_ordenes.empty:
         # Procesar 'productos_json' para extraer las llaves requeridas
-        df_ordenes_2 = df_ordenes[['id_orden', 'nombre_cliente', 'productos_json', 'fecha_creacion_str', 'hora_creacion', 'monto', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']].copy()
+        df_ordenes_2 = df_ordenes[['id_orden', 'nombre_cliente', 'productos_json', 'fecha_creacion_str', 'hora_creacion', 'monto', 'VALOR PRODUCTO', 'VALOR NETO CAFETERIA']].copy()
 
         # Definir una función segura para cargar JSON
         def safe_json_loads(x):
@@ -265,7 +355,7 @@ def process_products_data(df_ordenes):
         df_products['precioTotal'] = pd.to_numeric(df_products['precioTotal'], errors='coerce').fillna(0).round(3)
 
         # Reordenar columnas según lo especificado, incluyendo 'id_orden'
-        desired_product_columns = ['id_orden', 'nombre_cliente', 'producto', 'cantidad', 'precioUnitario', 'precioTotal', 'fecha_creacion_str', 'hora_creacion', 'monto', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
+        desired_product_columns = ['id_orden', 'nombre_cliente', 'producto', 'cantidad', 'precioUnitario', 'precioTotal', 'fecha_creacion_str', 'hora_creacion', 'monto', 'VALOR PRODUCTO', 'VALOR NETO CAFETERIA']
         df_products = df_products[desired_product_columns]
 
     return df_products
@@ -283,118 +373,160 @@ def process_cafeterias_data(df_ordenes_completadas):
     print("\nIniciando procesamiento de cafeterías...")
 
     # 1. Crear una copia del DataFrame original (ya filtrado)
-    df_octubre = df_ordenes_completadas.copy()
-    print(f"Registros totales en el DataFrame filtrado: {len(df_octubre)}")
+    df_cafeterias = df_ordenes_completadas.copy()
+    print(f"Registros totales en el DataFrame filtrado: {len(df_cafeterias)}")
 
-    # 2. Convertir las fechas correctamente (formato europeo)
-    df_octubre['fecha_creacion_dt'] = pd.to_datetime(df_octubre['fecha_creacion_str'], format='%d/%m/%Y', errors='coerce')
+    # 2. Obtener el mes actual
+    current_date = datetime.now()
+    first_day_current_month = current_date.replace(day=1)
+    last_day_current_month = (first_day_current_month + pd.offsets.MonthEnd(0)).to_pydatetime()
 
-    print("\nEjemplo de fechas convertidas:")
-    print(df_octubre['fecha_creacion_dt'].head())
+    print(f"\nFecha de inicio: {first_day_current_month.strftime('%d/%m/%Y')}")
+    print(f"Fecha de fin: {last_day_current_month.strftime('%d/%m/%Y')}")
 
-    # 3. Definir fechas de inicio y fin del rango
-    fecha_inicio = pd.Timestamp('2024-10-18')
-    fecha_fin = pd.Timestamp('2100-10-30')
+    # 3. Aplicar filtros de rango de fechas para el mes actual
+    df_cafeterias['fecha_creacion_dt'] = pd.to_datetime(df_cafeterias['fecha_creacion_str'], errors='coerce')
 
-    print(f"\nFecha de inicio: {fecha_inicio.strftime('%d/%m/%Y')}")
-    print(f"Fecha de fin: {fecha_fin.strftime('%d/%m/%Y')}")
-
-    # 4. Aplicar filtros de rango de fechas
-    df_octubre = df_octubre[
-        (df_octubre['fecha_creacion_dt'] >= fecha_inicio) & 
-        (df_octubre['fecha_creacion_dt'] <= fecha_fin)
+    df_cafeterias = df_cafeterias[
+        (df_cafeterias['fecha_creacion_dt'] >= first_day_current_month) & 
+        (df_cafeterias['fecha_creacion_dt'] <= last_day_current_month)
     ]
 
     # Mostrar información sobre el filtrado
     print(f"Registros que cumplen los criterios de fechas especificadas:")
-    print(f"Total de registros: {len(df_octubre)}")
+    print(f"Total de registros: {len(df_cafeterias)}")
 
     # Mostrar el rango de fechas para verificación
-    if not df_octubre.empty:
+    if not df_cafeterias.empty:
         print(f"\nRango de fechas en el DataFrame filtrado:")
-        print(f"Fecha más antigua: {df_octubre['fecha_creacion_dt'].min().strftime('%d/%m/%Y')}")
-        print(f"Fecha más reciente: {df_octubre['fecha_creacion_dt'].max().strftime('%d/%m/%Y')}")
+        print(f"Fecha más antigua: {df_cafeterias['fecha_creacion_dt'].min().strftime('%d/%m/%Y')}")
+        print(f"Fecha más reciente: {df_cafeterias['fecha_creacion_dt'].max().strftime('%d/%m/%Y')}")
     else:
         print("\nNo se encontraron registros que cumplan los criterios de filtrado")
         return pd.DataFrame()  # Retornar DataFrame vacío si no hay datos
 
-    # 5. Convertir las columnas numéricas
-    df_octubre['monto'] = pd.to_numeric(df_octubre['monto'], errors='coerce')
-    df_octubre['tasa'] = pd.to_numeric(df_octubre['tasa'], errors='coerce')
+    # 4. Convertir las columnas numéricas
+    df_cafeterias['monto'] = pd.to_numeric(df_cafeterias['monto'], errors='coerce')
+    df_cafeterias['tasa'] = pd.to_numeric(df_cafeterias['tasa'], errors='coerce')
 
-    # 6. Agrupar por cafetería y calcular totales, incluyendo nuevas columnas
-    df_cafeterias = df_octubre.groupby('cafeteria').agg({
+    # 5. Agrupar por cafetería y calcular totales, incluyendo nuevas columnas
+    aggregation_columns = {
         'monto': 'sum',
         'tasa': 'sum',
-        'VALOR NETO': 'sum',
-        '2.5% TOMADO': 'sum',
-        'VALOR DISPERSIÓN FINAL': 'sum'
-    }).reset_index()
+        'VALOR COMISION Monto': 'sum',
+        'VALOR RETEFUENTE APPU Monto': 'sum',
+        'VALOR RTE ICA APPU Monto': 'sum',
+        'VALOR NETO Monto': 'sum',
+        'VALOR COMISION APPU': 'sum',
+        'VALOR RETEFUENTE APPU': 'sum',
+        'VALOR RTE ICA APPU': 'sum',
+        'GANANCIA NETO APPU': 'sum',
+        'VALOR PRODUCTO': 'sum',
+        'VALOR COMISION CAFETERIA': 'sum',
+        'COMISION APPU-CAFETERIA': 'sum',
+        'COMISION-WOMPI': 'sum',
+        'VALOR RETEFUENTE CAFETERIA': 'sum',
+        'VALOR RTE ICA CAFETERIA': 'sum',
+        'VALOR NETO CAFETERIA': 'sum'
+    }
 
-    # 7. Calcular monto sin tasa
-    df_cafeterias['monto_sin_tasa'] = df_cafeterias['monto'] - df_cafeterias['tasa']
+    df_cafeterias_summary = df_cafeterias.groupby('cafeteria').agg(aggregation_columns).reset_index()
 
-    # 8. Ordenar por monto sin tasa de mayor a menor
-    df_cafeterias = df_cafeterias.sort_values('monto_sin_tasa', ascending=False)
+    # 6. Calcular monto sin tasa
+    df_cafeterias_summary['monto_sin_tasa'] = df_cafeterias_summary['monto'] - df_cafeterias_summary['tasa']
 
-    # 9. Añadir fila de total
+    # 7. Ordenar por monto sin tasa de mayor a menor
+    df_cafeterias_summary = df_cafeterias_summary.sort_values('monto_sin_tasa', ascending=False)
+
+    # 8. Añadir fila de total
     total_row = pd.DataFrame({
-        'cafeteria': ['Total  (Órdenes Completadas)'],
-        'monto': [df_cafeterias['monto'].sum()],
-        'tasa': [df_cafeterias['tasa'].sum()],
-        'VALOR NETO': [df_cafeterias['VALOR NETO'].sum()],
-        '2.5% TOMADO': [df_cafeterias['2.5% TOMADO'].sum()],
-        'VALOR DISPERSIÓN FINAL': [df_cafeterias['VALOR DISPERSIÓN FINAL'].sum()],
-        'monto_sin_tasa': [df_cafeterias['monto_sin_tasa'].sum()]
+        'cafeteria': ['Total (Órdenes Completadas)'],
+        'monto': [df_cafeterias_summary['monto'].sum()],
+        'tasa': [df_cafeterias_summary['tasa'].sum()],
+        'VALOR COMISION Monto': [df_cafeterias_summary['VALOR COMISION Monto'].sum()],
+        'VALOR RETEFUENTE APPU Monto': [df_cafeterias_summary['VALOR RETEFUENTE APPU Monto'].sum()],
+        'VALOR RTE ICA APPU Monto': [df_cafeterias_summary['VALOR RTE ICA APPU Monto'].sum()],
+        'VALOR NETO Monto': [df_cafeterias_summary['VALOR NETO Monto'].sum()],
+        'VALOR COMISION APPU': [df_cafeterias_summary['VALOR COMISION APPU'].sum()],
+        'VALOR RETEFUENTE APPU': [df_cafeterias_summary['VALOR RETEFUENTE APPU'].sum()],
+        'VALOR RTE ICA APPU': [df_cafeterias_summary['VALOR RTE ICA APPU'].sum()],
+        'GANANCIA NETO APPU': [df_cafeterias_summary['GANANCIA NETO APPU'].sum()],
+        'VALOR PRODUCTO': [df_cafeterias_summary['VALOR PRODUCTO'].sum()],
+        'VALOR COMISION CAFETERIA': [df_cafeterias_summary['VALOR COMISION CAFETERIA'].sum()],
+        'COMISION APPU-CAFETERIA': [df_cafeterias_summary['COMISION APPU-CAFETERIA'].sum()],
+        'COMISION-WOMPI': [df_cafeterias_summary['COMISION-WOMPI'].sum()],
+        'VALOR RETEFUENTE CAFETERIA': [df_cafeterias_summary['VALOR RETEFUENTE CAFETERIA'].sum()],
+        'VALOR RTE ICA CAFETERIA': [df_cafeterias_summary['VALOR RTE ICA CAFETERIA'].sum()],
+        'VALOR NETO CAFETERIA': [df_cafeterias_summary['VALOR NETO CAFETERIA'].sum()],
+        'monto_sin_tasa': [df_cafeterias_summary['monto_sin_tasa'].sum()]
     })
 
-    df_cafeterias = pd.concat([df_cafeterias, total_row], ignore_index=True)
+    df_cafeterias_summary = pd.concat([df_cafeterias_summary, total_row], ignore_index=True)
 
-    # 10. Renombrar columnas para mejor presentación
-    df_cafeterias = df_cafeterias.rename(columns={
+    # 9. Renombrar columnas para mejor presentación
+    df_cafeterias_summary = df_cafeterias_summary.rename(columns={
         'cafeteria': 'Cafeterias',
         'monto': 'Monto con Tasa',
         'tasa': 'Tasa Total',
         'monto_sin_tasa': 'Monto sin Tasa',
-        'VALOR NETO': 'Total VALOR NETO',
-        '2.5% TOMADO': 'Total 2.5% TOMADO',
-        'VALOR DISPERSIÓN FINAL': 'Total VALOR DISPERSIÓN FINAL'
+        'VALOR COMISION Monto': 'Total VALOR COMISION Monto',
+        'VALOR RETEFUENTE APPU Monto': 'Total VALOR RETEFUENTE APPU Monto',
+        'VALOR RTE ICA APPU Monto': 'Total VALOR RTE ICA APPU Monto',
+        'VALOR NETO Monto': 'Total VALOR NETO Monto',
+        'VALOR COMISION APPU': 'Total VALOR COMISION APPU',
+        'VALOR RETEFUENTE APPU': 'Total VALOR RETEFUENTE APPU',
+        'VALOR RTE ICA APPU': 'Total VALOR RTE ICA APPU',
+        'GANANCIA NETO APPU': 'Total GANANCIA NETO APPU',
+        'VALOR PRODUCTO': 'Total VALOR PRODUCTO',
+        'VALOR COMISION CAFETERIA': 'Total VALOR COMISION CAFETERIA',
+        'COMISION APPU-CAFETERIA': 'Total COMISION APPU-CAFETERIA',
+        'COMISION-WOMPI': 'Total COMISION-WOMPI',
+        'VALOR RETEFUENTE CAFETERIA': 'Total VALOR RETEFUENTE CAFETERIA',
+        'VALOR RTE ICA CAFETERIA': 'Total VALOR RTE ICA CAFETERIA',
+        'VALOR NETO CAFETERIA': 'Total VALOR NETO CAFETERIA'
     })
 
-    # 11. Seleccionar y reordenar columnas finales
-    df_cafeterias = df_cafeterias[['Cafeterias', 'Monto con Tasa', 'Tasa Total', 'Monto sin Tasa', 'Total VALOR NETO', 'Total 2.5% TOMADO', 'Total VALOR DISPERSIÓN FINAL']]
+    # 10. Seleccionar y reordenar columnas finales
+    final_columns = [
+        'Cafeterias', 'Monto con Tasa', 'Tasa Total', 'Monto sin Tasa',
+        'Total VALOR COMISION Monto', 'Total VALOR RETEFUENTE APPU Monto',
+        'Total VALOR RTE ICA APPU Monto', 'Total VALOR NETO Monto',
+        'Total VALOR COMISION APPU', 'Total VALOR RETEFUENTE APPU',
+        'Total VALOR RTE ICA APPU', 'Total GANANCIA NETO APPU',
+        'Total VALOR PRODUCTO', 'Total VALOR COMISION CAFETERIA',
+        'Total COMISION APPU-CAFETERIA', 'Total COMISION-WOMPI',
+        'Total VALOR RETEFUENTE CAFETERIA', 'Total VALOR RTE ICA CAFETERIA',
+        'Total VALOR NETO CAFETERIA'
+    ]
 
-    # 12. Redondear los valores numéricos a 3 decimales
-    df_cafeterias['Monto con Tasa'] = df_cafeterias['Monto con Tasa'].round(3)
-    df_cafeterias['Tasa Total'] = df_cafeterias['Tasa Total'].round(3)
-    df_cafeterias['Monto sin Tasa'] = df_cafeterias['Monto sin Tasa'].round(3)
-    df_cafeterias['Total VALOR NETO'] = df_cafeterias['Total VALOR NETO'].round(3)
-    df_cafeterias['Total 2.5% TOMADO'] = df_cafeterias['Total 2.5% TOMADO'].round(3)
-    df_cafeterias['Total VALOR DISPERSIÓN FINAL'] = df_cafeterias['Total VALOR DISPERSIÓN FINAL'].round(3)
+    # Verificar que todas las columnas existan
+    missing_final_columns = [col for col in final_columns if col not in df_cafeterias_summary.columns]
+    if missing_final_columns:
+        print(f"Advertencia: Las siguientes columnas faltan en df_cafeterias_summary y se rellenarán con valores NaN: {missing_final_columns}")
+        for col in missing_final_columns:
+            df_cafeterias_summary[col] = np.nan
+
+    df_cafeterias_summary = df_cafeterias_summary[final_columns]
+
+    # 11. Redondear los valores numéricos a 3 decimales
+    numeric_columns = [
+        'Monto con Tasa', 'Tasa Total', 'Monto sin Tasa',
+        'Total VALOR COMISION Monto', 'Total VALOR RETEFUENTE APPU Monto',
+        'Total VALOR RTE ICA APPU Monto', 'Total VALOR NETO Monto',
+        'Total VALOR COMISION APPU', 'Total VALOR RETEFUENTE APPU',
+        'Total VALOR RTE ICA APPU', 'Total GANANCIA NETO APPU',
+        'Total VALOR PRODUCTO', 'Total VALOR COMISION CAFETERIA',
+        'Total COMISION APPU-CAFETERIA', 'Total COMISION-WOMPI',
+        'Total VALOR RETEFUENTE CAFETERIA', 'Total VALOR RTE ICA CAFETERIA',
+        'Total VALOR NETO CAFETERIA'
+    ]
+
+    df_cafeterias_summary[numeric_columns] = df_cafeterias_summary[numeric_columns].round(3)
 
     print("\nResumen final de cafeterías (solo órdenes completadas):")
-    print(df_cafeterias)
+    print(df_cafeterias_summary)
 
-    return df_cafeterias
-
-def convertir_decimal(x):
-    """
-    Convierte objetos Decimal a float.
-
-    Args:
-        x (any): Valor a convertir.
-
-    Returns:
-        any: Valor convertido.
-    """
-    if isinstance(x, Decimal):
-        return float(x)
-    elif isinstance(x, list):
-        return [convertir_decimal(i) for i in x]
-    elif isinstance(x, dict):
-        return {k: convertir_decimal(v) for k, v in x.items()}
-    else:
-        return x
+    return df_cafeterias_summary
 
 def convertir_columnas_numericas(df):
     """
@@ -438,8 +570,6 @@ def procesar_ingredientes(df_ingredientes):
                 lambda x: json.dumps(x) if isinstance(x, dict) else x
             )
     return df_ingredientes
-
-# --- Funciones del segundo script ---
 
 def convertir_columnas_numericas_productos(df_productos):
     """
@@ -540,43 +670,69 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
     # Obtener timestamp si es necesario
     time_suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if timestamp else ""
 
-    # Obtener el mes actual
-    current_month = datetime.now().strftime('%B')
+    # Obtener el mes actual en español
+    current_month = datetime.now().strftime('%B').capitalize()
 
     # Diccionario para almacenar los paths de los archivos generados
     generated_files = {}
 
     try:
         # 1. Exportar Órdenes con segmentaciones
-        if 'ordenes' in dataframes and 'ordenes_completadas' in dataframes:
+        if 'ordenes_display' in dataframes and 'ordenes_completadas_display' in dataframes:
             filename = f'ordenes_segmentadas.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+                workbook = writer.book
+
                 # Hoja 1: Órdenes
-                dataframes['ordenes'].to_excel(writer, index=False, sheet_name='Órdenes')
+                sheet_name = 'Órdenes'
+                dataframes['ordenes_display'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['ordenes_display']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaÓrdenes',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Hoja 2: Órdenes Completadas
-                dataframes['ordenes_completadas'].to_excel(writer, index=False, sheet_name='Órdenes Completadas')
+                sheet_name = 'Órdenes Completadas'
+                dataframes['ordenes_completadas_display'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['ordenes_completadas_display']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaOrdenesCompletadas',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Hoja 3: Volumen de pedidos por fecha
                 if 'df_count' in dataframes:
-                    dataframes['df_count'].to_excel(writer, index=False, sheet_name='Volumen de pedidos por fecha')
+                    sheet_name = 'Volumen de pedidos por fecha'
+                    dataframes['df_count'].to_excel(writer, index=False, sheet_name=sheet_name)
+                    worksheet = writer.sheets[sheet_name]
+                    df = dataframes['df_count']
+                    num_rows, num_cols = df.shape
+                    worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                        'columns': [{'header': col} for col in df.columns],
+                        'name': 'TablaVolumenPedidos',
+                        'style': 'Table Style Medium 9'
+                    })
 
                 # Hoja 4: Popularidad del producto
                 if 'df_product_popularity' in dataframes:
-                    dataframes['df_product_popularity'].to_excel(writer, index=False, sheet_name='Popularidad del producto')
-
-                # Hoja 5: Ingresos por institución
-                if 'df_revenue_institution' in dataframes:
-                    dataframes['df_revenue_institution'].to_excel(writer, index=False, sheet_name='Ingresos por institución')
-
-                # Hoja 6: Para llevar vs en sitio
-                if 'df_order_type' in dataframes:
-                    dataframes['df_order_type'].to_excel(writer, index=False, sheet_name='Para llevar o en el lugar')
-
-                # Hoja 7: Horas punta
-                if 'df_peak_hours' in dataframes:
-                    dataframes['df_peak_hours'].to_excel(writer, index=False, sheet_name='Horas punta')
+                    sheet_name = 'Popularidad del producto'
+                    dataframes['df_product_popularity'].to_excel(writer, index=False, sheet_name=sheet_name)
+                    worksheet = writer.sheets[sheet_name]
+                    df = dataframes['df_product_popularity']
+                    num_rows, num_cols = df.shape
+                    worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                        'columns': [{'header': col} for col in df.columns],
+                        'name': 'TablaPopularidadProducto',
+                        'style': 'Table Style Medium 9'
+                    })
 
             generated_files['ordenes'] = excel_path
 
@@ -585,8 +741,17 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
             filename = f'detalle_productos.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-                dataframes['products'].to_excel(writer, index=False, sheet_name='Detalle de Productos')
-
+                workbook = writer.book
+                sheet_name = 'Detalle de Productos'
+                dataframes['products'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['products']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaDetalleProductos',
+                    'style': 'Table Style Medium 9'
+                })
             generated_files['productos'] = excel_path
 
         # 3. Exportar Usuarios App
@@ -594,8 +759,17 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
             filename = f'usuarios_app.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-                dataframes['usuarios_app'].to_excel(writer, index=False, sheet_name='Usuarios_App')
-
+                workbook = writer.book
+                sheet_name = 'Usuarios_App'
+                dataframes['usuarios_app'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['usuarios_app']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaUsuariosApp',
+                    'style': 'Table Style Medium 9'
+                })
             generated_files['usuarios_app'] = excel_path
 
         # 4. Exportar Usuarios
@@ -603,8 +777,17 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
             filename = f'usuarios.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-                dataframes['usuarios'].to_excel(writer, index=False, sheet_name='Usuarios')
-
+                workbook = writer.book
+                sheet_name = 'Usuarios'
+                dataframes['usuarios'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['usuarios']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaUsuarios',
+                    'style': 'Table Style Medium 9'
+                })
             generated_files['usuarios'] = excel_path
 
         # 5. Exportar Resumen de Cafeterías
@@ -616,18 +799,24 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
             if not df_cafeterias.empty:
                 with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-                    df_cafeterias.to_excel(writer, index=False, sheet_name='Resumen Cafeterías')
+                    workbook = writer.book
+                    sheet_name = 'Resumen Cafeterías'
+                    df_cafeterias.to_excel(writer, index=False, sheet_name=sheet_name)
+                    worksheet = writer.sheets[sheet_name]
+                    num_rows, num_cols = df_cafeterias.shape
+                    worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                        'columns': [{'header': col} for col in df_cafeterias.columns],
+                        'name': 'TablaResumenCafeterias',
+                        'style': 'Table Style Medium 9'
+                    })
 
                     # Formatear las columnas de monto
-                    workbook = writer.book
-                    worksheet = writer.sheets['Resumen Cafeterías']
                     money_format = workbook.add_format({'num_format': '$#,##0.000'})
 
-                    # Asumiendo que las columnas de monto están en B, D, E, F, G
                     # Ajusta las columnas según el orden final del DataFrame
-                    # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR NETO, Total 2.5% TOMADO, Total VALOR DISPERSIÓN FINAL
-                    # Índices Excel: A, B, C, D, E, F, G
-                    worksheet.set_column('B:G', 20, money_format)
+                    for idx, col in enumerate(df_cafeterias.columns):
+                        if col != 'Cafeterias':
+                            worksheet.set_column(idx, idx, 20, money_format)
 
                 generated_files['cafeterias'] = excel_path
             else:
@@ -637,16 +826,35 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
         if 'ingredientes' in dataframes:
             filename = f'ingredientes.xlsx'
             excel_path = os.path.join(output_dir, filename)
-            df_ingredientes = dataframes['ingredientes']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+                workbook = writer.book
+
                 # Hoja 1: Ingredientes
-                df_ingredientes.to_excel(writer, index=False, sheet_name='Ingredientes')
+                sheet_name = 'Ingredientes'
+                dataframes['ingredientes'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['ingredientes']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaIngredientes',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Hoja 2: Análisis Opciones
-                columnas_opciones = [col for col in df_ingredientes.columns if 'opcion_' in col]
+                columnas_opciones = [col for col in df.columns if 'opcion_' in col]
                 if columnas_opciones:
-                    analisis_opciones = df_ingredientes[columnas_opciones].notna().sum()
-                    analisis_opciones.to_frame('Cantidad de Opciones').to_excel(writer, sheet_name='Análisis Opciones')
+                    sheet_name = 'Análisis Opciones'
+                    analisis_opciones = dataframes['ingredientes'][columnas_opciones].notna().sum().reset_index()
+                    analisis_opciones.columns = ['Opción', 'Cantidad de Opciones']
+                    analisis_opciones.to_excel(writer, index=False, sheet_name=sheet_name)
+                    worksheet = writer.sheets[sheet_name]
+                    num_rows, num_cols = analisis_opciones.shape
+                    worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                        'columns': [{'header': col} for col in analisis_opciones.columns],
+                        'name': 'TablaAnalisisOpciones',
+                        'style': 'Table Style Medium 9'
+                    })
 
             generated_files['ingredientes'] = excel_path
 
@@ -654,14 +862,32 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
         if 'instituciones' in dataframes:
             filename = f'instituciones.xlsx'
             excel_path = os.path.join(output_dir, filename)
-            df_instituciones = dataframes['instituciones']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+                workbook = writer.book
+
                 # Hoja 1: Instituciones
-                df_instituciones.to_excel(writer, index=False, sheet_name='Instituciones')
+                sheet_name = 'Instituciones'
+                dataframes['instituciones'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['instituciones']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaInstituciones',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Hoja 2: Análisis por Ciudad
-                inst_stats = df_instituciones.groupby(['ciudad', 'is_active']).size().unstack(fill_value=0)
-                inst_stats.to_excel(writer, sheet_name='Análisis por Ciudad')
+                sheet_name = 'Análisis por Ciudad'
+                inst_stats = dataframes['instituciones'].groupby(['ciudad', 'is_active']).size().unstack(fill_value=0).reset_index()
+                inst_stats.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets['Análisis por Ciudad']
+                num_rows, num_cols = inst_stats.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in inst_stats.columns],
+                    'name': 'TablaAnalisisCiudad',
+                    'style': 'Table Style Medium 9'
+                })
 
             generated_files['instituciones'] = excel_path
 
@@ -669,22 +895,58 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
         if 'productos' in dataframes:
             filename = f'productos.xlsx'
             excel_path = os.path.join(output_dir, filename)
-            df_productos = dataframes['productos']
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+                workbook = writer.book
+
                 # Hoja 1: Productos
-                df_productos.to_excel(writer, index=False, sheet_name='Productos')
+                sheet_name = 'Productos'
+                dataframes['productos'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['productos']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaProductos',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Hoja 2: Estadísticas
                 estadisticas_productos = pd.DataFrame({
-                    'Total Productos': [len(df_productos)],
-                    'Productos con Stock': [(df_productos['cantidad_disponible'] > 0).sum()],
-                    'Precio Promedio': [df_productos['precio_unitario'].mean().round(3)],
-                    'Precio Máximo': [df_productos['precio_unitario'].max().round(3)],
-                    'Precio Mínimo': [df_productos['precio_unitario'].min().round(3)]
+                    'Total Productos': [len(dataframes['productos'])],
+                    'Productos con Stock': [(dataframes['productos']['cantidad_disponible'] > 0).sum()],
+                    'Precio Promedio': [dataframes['productos']['precio_unitario'].mean().round(3)],
+                    'Precio Máximo': [dataframes['productos']['precio_unitario'].max().round(3)],
+                    'Precio Mínimo': [dataframes['productos']['precio_unitario'].min().round(3)]
                 })
-                estadisticas_productos.to_excel(writer, sheet_name='Estadísticas', index=False)
+                sheet_name = 'Estadísticas'
+                estadisticas_productos.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                num_rows, num_cols = estadisticas_productos.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in estadisticas_productos.columns],
+                    'name': 'TablaEstadisticasProductos',
+                    'style': 'Table Style Medium 9'
+                })
 
             generated_files['productos'] = excel_path
+
+        # 9. Exportar Cafeterias Raw (Renombrado a cafeterias_db)
+        if 'cafeterias_raw' in dataframes:
+            filename = f'cafeterias_db.xlsx'
+            excel_path = os.path.join(output_dir, filename)
+            with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+                workbook = writer.book
+                sheet_name = 'Cafeterias DB'
+                dataframes['cafeterias_raw'].to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['cafeterias_raw']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaCafeteriasDB',
+                    'style': 'Table Style Medium 9'
+                })
+            generated_files['cafeterias_raw'] = excel_path
 
         print("\nArchivos Excel generados exitosamente:")
         for clave, ruta in generated_files.items():
@@ -720,7 +982,7 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
 
     # Convertir 'fecha_creacion_dt' a datetime si es necesario
     if 'fecha_creacion_dt' not in df_graph.columns:
-        df_graph['fecha_creacion_dt'] = pd.to_datetime(df_graph['fecha_creacion_str'], format='%d/%m/%Y', errors='coerce')
+        df_graph['fecha_creacion_dt'] = pd.to_datetime(df_graph['fecha_creacion_str'], errors='coerce')
 
     # df_count: Cantidad de Órdenes por Fecha
     df_count = df_graph.groupby(df_graph['fecha_creacion_dt'].dt.date).size().reset_index(name='count')
@@ -775,7 +1037,7 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
     figures_and_data['fig_orden'] = fig_orden
 
     # Gráficas de productos pedidos por día
-    df_products['fecha_creacion_dt'] = pd.to_datetime(df_products['fecha_creacion_str'], format='%d/%m/%Y', errors='coerce')
+    df_products['fecha_creacion_dt'] = pd.to_datetime(df_products['fecha_creacion_str'], errors='coerce')
     df_product_counts = df_products.groupby(['fecha_creacion_dt', 'producto'])['cantidad'].sum().reset_index()
     df_product_counts.sort_values(by='fecha_creacion_dt', inplace=True)
     figures_and_data['df_product_counts'] = df_product_counts
@@ -804,8 +1066,13 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
 
     # Cálculo de cantidad total por producto para el gráfico de barras (último mes)
     current_date = pd.Timestamp.today()
-    one_month_ago = current_date - pd.DateOffset(months=1)
-    df_products_last_month = df_products[df_products['fecha_creacion_dt'] >= one_month_ago]
+    first_day_last_month = (current_date.replace(day=1) - pd.Timedelta(days=1)).replace(day=1)
+    last_day_last_month = (first_day_last_month + pd.offsets.MonthEnd(0)).to_pydatetime()
+
+    df_products_last_month = df_products[
+        (df_products['fecha_creacion_dt'] >= first_day_last_month) &
+        (df_products['fecha_creacion_dt'] <= last_day_last_month)
+    ]
     df_product_total_last_month = df_products_last_month.groupby('producto')['cantidad'].sum().reset_index()
     df_product_total_last_month = df_product_total_last_month.sort_values(by='cantidad', ascending=True)
     figures_and_data['df_product_total_last_month'] = df_product_total_last_month
@@ -818,7 +1085,8 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
         title='Cantidad Total de Cada Producto (Último Mes - Órdenes Completadas)',
         labels={'producto': 'Producto', 'cantidad': 'Cantidad'},
         text='cantidad',
-        color_discrete_sequence=px.colors.sequential.Viridis
+        color='cantidad',
+        color_continuous_scale=px.colors.sequential.Viridis
     )
     fig_bar_products.update_layout(
         xaxis=dict(
@@ -873,7 +1141,8 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
         title='Top 10 Clientes por Número de Órdenes Completadas',
         labels={'nombre_cliente': 'Cliente', 'Total_Ordenes': 'Total de Órdenes'},
         text='Total_Ordenes',
-        color_discrete_sequence=px.colors.sequential.Viridis
+        color='Total_Ordenes',
+        color_continuous_scale=px.colors.sequential.Viridis
     )
     fig_client_grouping.update_layout(
         yaxis=dict(
@@ -893,28 +1162,27 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
 
     fig_product_popularity = px.bar(
         df_product_popularity.head(10),
-        x='producto',
-        y='Total_Cantidad',
+        x='Total_Cantidad',
+        y='producto',
+        orientation='h',
         title='Top 10 Productos Más Populares (Órdenes Completadas)',
         labels={'producto': 'Producto', 'Total_Cantidad': 'Cantidad Total'},
         text='Total_Cantidad',
-        color_discrete_sequence=px.colors.sequential.Viridis
+        color='Total_Cantidad',
+        color_continuous_scale=px.colors.sequential.Viridis
     )
     fig_product_popularity.update_layout(
         xaxis=dict(
             tickangle=45
         ),
         yaxis=dict(
-            title='Cantidad Total'
+            title='Producto'
         ),
         height=600
     )
     figures_and_data['fig_product_popularity'] = fig_product_popularity
 
     # Estado del pedido y comprobante de pago
-    # Dado que todas las órdenes en df_ordenes_completadas ya están completadas, este gráfico puede no ser necesario
-    # Pero si 'comprobante_pago' varía, mantenerlo
-
     df_order_status = df_ordenes_completadas.groupby(['orden_completada', 'comprobante_pago']).size().reset_index(name='Cantidad')
     figures_and_data['df_order_status'] = df_order_status
 
@@ -954,7 +1222,8 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
         title='Top 10 Instituciones por Ingresos Totales (Órdenes Completadas)',
         labels={'institucion': 'Institución', 'Total_Revenue': 'Ingresos Totales'},
         text='Total_Revenue',
-        color_discrete_sequence=px.colors.sequential.Viridis
+        color='Total_Revenue',
+        color_continuous_scale=px.colors.sequential.Viridis
     )
     fig_revenue_institution.update_layout(
         yaxis=dict(
@@ -983,44 +1252,52 @@ def create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, d
 
     # Horas punta
     df_peak_hours = df_ordenes_completadas.copy()
-    df_peak_hours['fecha_creacion_dt'] = pd.to_datetime(df_peak_hours['fecha_creacion_str'], format='%d/%m/%Y', errors='coerce')
+    df_peak_hours['fecha_creacion_dt'] = pd.to_datetime(df_peak_hours['fecha_creacion_str'], errors='coerce')
 
-    # Obtener el mes más reciente
-    fecha_mas_reciente = df_peak_hours['fecha_creacion_dt'].max()
-    mes_mas_reciente = fecha_mas_reciente.replace(day=1)
+    # Obtener el mes actual
+    current_date = datetime.now()
+    first_day_current_month = current_date.replace(day=1)
+    last_day_current_month = (first_day_current_month + pd.offsets.MonthEnd(0)).to_pydatetime()
 
-    # Filtrar solo el mes más reciente
-    df_peak_hours = df_peak_hours[df_peak_hours['fecha_creacion_dt'] >= mes_mas_reciente]
+    # Filtrar solo el mes actual
+    df_peak_hours = df_peak_hours[
+        (df_peak_hours['fecha_creacion_dt'] >= first_day_current_month) &
+        (df_peak_hours['fecha_creacion_dt'] <= last_day_current_month)
+    ]
 
-    # Procesar las horas
-    df_peak_hours['hora'] = pd.to_datetime(df_peak_hours['hora_creacion'], format='%H:%M:%S', errors='coerce').dt.hour
+    if df_peak_hours.empty:
+        print("Advertencia: No hay datos para el mes actual. No se puede crear el gráfico de horas punta.")
+        figures_and_data['fig_peak_hours'] = go.Figure()
+    else:
+        # Procesar las horas
+        df_peak_hours['hora'] = pd.to_datetime(df_peak_hours['hora_creacion'], errors='coerce').dt.hour
 
-    df_peak_hours = df_peak_hours.groupby('hora').size().reset_index(name='Cantidad de Órdenes').sort_values(by='hora')
-    figures_and_data['df_peak_hours'] = df_peak_hours
+        df_peak_hours = df_peak_hours.groupby('hora').size().reset_index(name='Cantidad de Órdenes').sort_values(by='hora')
+        figures_and_data['df_peak_hours'] = df_peak_hours
 
-    mes_nombre = fecha_mas_reciente.strftime('%B %Y')
+        mes_nombre = first_day_current_month.strftime('%B %Y')
 
-    fig_peak_hours = px.bar(
-        df_peak_hours,
-        x='hora',
-        y='Cantidad de Órdenes',
-        title=f'Órdenes Completadas por Hora del Día - {mes_nombre}',
-        labels={'hora': 'Hora del Día', 'Cantidad de Órdenes': 'Cantidad de Órdenes'},
-        text='Cantidad de Órdenes',
-        color='hora',
-        color_continuous_scale=px.colors.sequential.Viridis
-    )
-    fig_peak_hours.update_layout(
-        xaxis=dict(
-            tickmode='linear',
-            dtick=1
-        ),
-        yaxis=dict(
-            title='Cantidad de Órdenes'
-        ),
-        height=600
-    )
-    figures_and_data['fig_peak_hours'] = fig_peak_hours
+        fig_peak_hours = px.bar(
+            df_peak_hours,
+            x='hora',
+            y='Cantidad de Órdenes',
+            title=f'Órdenes Completadas por Hora del Día - {mes_nombre}',
+            labels={'hora': 'Hora del Día', 'Cantidad de Órdenes': 'Cantidad de Órdenes'},
+            text='Cantidad de Órdenes',
+            color='hora',
+            color_continuous_scale=px.colors.sequential.Viridis
+        )
+        fig_peak_hours.update_layout(
+            xaxis=dict(
+                tickmode='linear',
+                dtick=1
+            ),
+            yaxis=dict(
+                title='Cantidad de Órdenes'
+            ),
+            height=600
+        )
+        figures_and_data['fig_peak_hours'] = fig_peak_hours
 
     # Gráfico de instituciones
     if not df_instituciones.empty:
@@ -1048,34 +1325,6 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
 
     # Combinar dataframes con figures_and_data
     dataframes.update(figures_and_data)
-
-    # Definir columnas deseadas para usuarios (del primer script)
-    desired_user_columns = [
-        'id',
-        'username',
-        'first_name',
-        'last_name',
-        'email',
-        'password',
-        'phone_number',
-        'date_joined',
-        'last_login',
-        'is_active',
-        'is_staff',
-        'is_admin',
-        'is_superadmin'
-    ]
-
-    # Reordenar y rellenar df_usuarios
-    if 'usuarios' in dataframes:
-        df_usuarios = dataframes['usuarios']
-        missing_columns = [col for col in desired_user_columns if col not in df_usuarios.columns]
-        if missing_columns:
-            print(f"Las siguientes columnas faltan en df_usuarios y se rellenarán con valores vacíos: {missing_columns}")
-            for col in missing_columns:
-                df_usuarios[col] = np.nan
-        df_usuarios = df_usuarios[desired_user_columns]
-        dataframes['usuarios'] = df_usuarios
 
     # Definir estilos para tablas (del segundo script)
     estilo_celda = {
@@ -1120,8 +1369,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                             ),
                             dash_table.DataTable(
                                 id='ordenes-table_1',
-                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes', pd.DataFrame()).columns],
-                                data=dataframes.get('ordenes', pd.DataFrame()).to_dict('records'),
+                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes_display', pd.DataFrame()).columns],
+                                data=dataframes.get('ordenes_display', pd.DataFrame()).to_dict('records'),
                                 page_size=10,
                                 sort_action='native',
                                 sort_mode='multi',
@@ -1136,10 +1385,18 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                 style_data_conditional=[
                                     {
                                         'if': {'column_id': col},
-                                        'format': {'specifier': '.3f'}
-                                    } for col in ['VALOR COMISION', 'VALOR RETEFUENTE', 'VALOR RTE ICA', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
-                                    if col in dataframes.get('ordenes', pd.DataFrame()).columns
-                                ]
+                                        'textAlign': 'right'
+                                    } for col in ['VALOR COMISION Monto', 'VALOR RETEFUENTE APPU Monto', 'VALOR RTE ICA APPU Monto', 'VALOR NETO Monto',
+                                                    'VALOR COMISION APPU', 'VALOR RETEFUENTE APPU', 'VALOR RTE ICA APPU', 'GANANCIA NETO APPU',
+                                                    'VALOR PRODUCTO', 'VALOR COMISION CAFETERIA', 'COMISION APPU-CAFETERIA',
+                                                    'COMISION-WOMPI', 'VALOR RETEFUENTE CAFETERIA', 'VALOR RTE ICA CAFETERIA',
+                                                    'VALOR NETO CAFETERIA']
+                                        if col in dataframes.get('ordenes_display', pd.DataFrame()).columns
+                                ],
+                                style_header={
+                                    'backgroundColor': 'rgb(230, 230, 230)',
+                                    'fontWeight': 'bold'
+                                }
                             ),
                             html.Button("Descargar Órdenes a Excel", id="btn-download-ordenes", n_clicks=0),
                             dcc.Download(id="download-ordenes"),
@@ -1156,8 +1413,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                             ),
                             dash_table.DataTable(
                                 id='ordenes-completadas-table',
-                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes_completadas', pd.DataFrame()).columns],
-                                data=dataframes.get('ordenes_completadas', pd.DataFrame()).to_dict('records'),
+                                columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('ordenes_completadas_display', pd.DataFrame()).columns],
+                                data=dataframes.get('ordenes_completadas_display', pd.DataFrame()).to_dict('records'),
                                 page_size=10,
                                 sort_action='native',
                                 sort_mode='multi',
@@ -1172,10 +1429,18 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                 style_data_conditional=[
                                     {
                                         'if': {'column_id': col},
-                                        'format': {'specifier': '.3f'}
-                                    } for col in ['VALOR COMISION', 'VALOR RETEFUENTE', 'VALOR RTE ICA', 'VALOR NETO', '2.5% TOMADO', 'VALOR DISPERSIÓN FINAL']
-                                    if col in dataframes.get('ordenes_completadas', pd.DataFrame()).columns
-                                ]
+                                        'textAlign': 'right'
+                                    } for col in ['VALOR COMISION Monto', 'VALOR RETEFUENTE APPU Monto', 'VALOR RTE ICA APPU Monto', 'VALOR NETO Monto',
+                                                    'VALOR COMISION APPU', 'VALOR RETEFUENTE APPU', 'VALOR RTE ICA APPU', 'GANANCIA NETO APPU',
+                                                    'VALOR PRODUCTO', 'VALOR COMISION CAFETERIA', 'COMISION APPU-CAFETERIA',
+                                                    'COMISION-WOMPI', 'VALOR RETEFUENTE CAFETERIA', 'VALOR RTE ICA CAFETERIA',
+                                                    'VALOR NETO CAFETERIA']
+                                        if col in dataframes.get('ordenes_completadas_display', pd.DataFrame()).columns
+                                ],
+                                style_header={
+                                    'backgroundColor': 'rgb(230, 230, 230)',
+                                    'fontWeight': 'bold'
+                                }
                             ),
                             html.Button("Descargar Órdenes Completadas a Excel", id="btn-download-ordenes-completadas", n_clicks=0),
                             dcc.Download(id="download-ordenes-completadas"),
@@ -1223,6 +1488,10 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                     'width': '200px',
                                     'maxWidth': '250px',
                                 },
+                                style_header={
+                                    'backgroundColor': 'rgb(230, 230, 230)',
+                                    'fontWeight': 'bold'
+                                }
                             ),
                             html.Button("Descargar Detalle de Productos a Excel", id="btn-download-detalle-productos", n_clicks=0),
                             dcc.Download(id="download-detalle-productos"),
@@ -1284,6 +1553,10 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                             'width': '200px',
                             'maxWidth': '250px',
                         },
+                        style_header={
+                            'backgroundColor': 'rgb(230, 230, 230)',
+                            'fontWeight': 'bold'
+                        }
                     ),
                     html.Button("Descargar Usuarios App a Excel", id="btn-download-usuarios-app", n_clicks=0),
                     dcc.Download(id="download-usuarios-app"),
@@ -1309,10 +1582,14 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                         style_table={'overflowX': 'auto'},
                         style_cell={
                             'textAlign': 'left',
-                            'minWidth': '100px',
-                            'width': '150px',
-                            'maxWidth': '180px',
+                            'minWidth': '150px',
+                            'width': '200px',
+                            'maxWidth': '250px',
                         },
+                        style_header={
+                            'backgroundColor': 'rgb(230, 230, 230)',
+                            'fontWeight': 'bold'
+                        }
                     ),
                     html.Button("Descargar Usuarios a Excel", id="btn-download-usuarios", n_clicks=0),
                     dcc.Download(id="download-usuarios"),
@@ -1343,17 +1620,58 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                         style_data_conditional=[
                             {
                                 'if': {'column_id': col},
-                                'format': {'specifier': '.3f'}
-                            } for col in ['Monto con Tasa', 'Tasa Total', 'Monto sin Tasa', 'Total VALOR NETO', 'Total 2.5% TOMADO', 'Total VALOR DISPERSIÓN FINAL']
-                            if col in dataframes.get('cafeterias', pd.DataFrame()).columns
-                        ]
+                                'textAlign': 'right'
+                            } for col in ['Monto con Tasa', 'Tasa Total', 'Monto sin Tasa',
+                                        'Total VALOR COMISION Monto', 'Total VALOR RETEFUENTE APPU Monto',
+                                        'Total VALOR RTE ICA APPU Monto', 'Total VALOR NETO Monto',
+                                        'Total VALOR COMISION APPU', 'Total VALOR RETEFUENTE APPU',
+                                        'Total VALOR RTE ICA APPU', 'Total GANANCIA NETO APPU',
+                                        'Total VALOR PRODUCTO', 'Total VALOR COMISION CAFETERIA',
+                                        'Total COMISION APPU-CAFETERIA', 'Total COMISION-WOMPI',
+                                        'Total VALOR RETEFUENTE CAFETERIA', 'Total VALOR RTE ICA CAFETERIA',
+                                        'Total VALOR NETO CAFETERIA']
+                                if col in dataframes.get('cafeterias', pd.DataFrame()).columns
+                        ],
                     ),
                     html.Button("Descargar Resumen de Cafeterías a Excel", id="btn-download-cafeterias", n_clicks=0),
                     dcc.Download(id="download-cafeterias"),
                 ])
             ]),
 
-            # Pestaña 6: Ingredientes (del segundo script)
+            # Pestaña 6: Cafeterías (Renombrada a cafeterias_db)
+            dcc.Tab(label='Cafeterías', children=[
+                html.Div([
+                    dcc.Input(
+                        id='search-cafeterias-db',
+                        type='text',
+                        placeholder='Búsqueda global en cafeterías (db)...',
+                        style={'width': '100%', 'marginBottom': '10px', 'marginTop': '10px', 'padding': '8px'}
+                    ),
+                    dash_table.DataTable(
+                        id='cafeterias_db_table',
+                        columns=[{'name': i.replace('_', ' ').capitalize(), 'id': i} for i in dataframes.get('cafeterias_raw', pd.DataFrame()).columns],
+                        data=dataframes.get('cafeterias_raw', pd.DataFrame()).to_dict('records'),
+                        page_size=10,
+                        sort_action='native',
+                        sort_mode='multi',
+                        style_table={'overflowX': 'auto'},
+                        style_cell={
+                            'textAlign': 'left',
+                            'minWidth': '150px',
+                            'width': '200px',
+                            'maxWidth': '250px',
+                        },
+                        style_header={
+                            'backgroundColor': 'rgb(230, 230, 230)',
+                            'fontWeight': 'bold'
+                        }
+                    ),
+                    html.Button("Descargar Cafeterías DB a Excel", id="btn-download-cafeterias-db", n_clicks=0),
+                    dcc.Download(id="download-cafeterias-db"),
+                ])
+            ]),
+
+            # Pestaña 7: Ingredientes (del segundo script)
             dcc.Tab(label='Ingredientes', children=[
                 html.Div([
                     dcc.Input(
@@ -1379,7 +1697,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 ])
             ]),
 
-            # Pestaña 7: Instituciones (del segundo script)
+            # Pestaña 8: Instituciones (del segundo script)
             dcc.Tab(label='Instituciones', children=[
                 dcc.Tabs([
                     # Subpestaña Tabla de Datos
@@ -1419,7 +1737,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                 ])
             ]),
 
-            # Pestaña 8: Productos (del segundo script y parte del primero)
+            # Pestaña 9: Productos (del segundo script y parte del primero)
             dcc.Tab(label='Productos', children=[
                 html.Div([
                     dcc.Input(
@@ -1457,7 +1775,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         [Input('search-ordenes', 'value')]
     )
     def update_ordenes_table(search_value):
-        filtered_df = filter_dataframe(dataframes.get('ordenes', pd.DataFrame()), search_value)
+        filtered_df = filter_dataframe(dataframes.get('ordenes_display', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
     # Callback para filtrar Órdenes Completadas
@@ -1466,7 +1784,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         [Input('search-ordenes-completadas', 'value')]
     )
     def update_ordenes_completadas_table(search_value):
-        filtered_df = filter_dataframe(dataframes.get('ordenes_completadas', pd.DataFrame()), search_value)
+        filtered_df = filter_dataframe(dataframes.get('ordenes_completadas_display', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
     # Callback para filtrar Productos (Tabla de Productos)
@@ -1496,13 +1814,22 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         filtered_df = filter_dataframe(dataframes.get('usuarios', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
-    # Callback para filtrar Cafeterías
+    # Callback para filtrar Resumen de Cafeterías
     @app.callback(
         Output('cafeterias-table', 'data'),
         [Input('search-cafeterias', 'value')]
     )
     def update_cafeterias_table(search_value):
         filtered_df = filter_dataframe(dataframes.get('cafeterias', pd.DataFrame()), search_value)
+        return filtered_df.to_dict('records')
+
+    # Callback para filtrar Cafeterías DB (renombrado)
+    @app.callback(
+        Output('cafeterias_db_table', 'data'),
+        [Input('search-cafeterias-db', 'value')]
+    )
+    def update_cafeterias_db_table(search_value):
+        filtered_df = filter_dataframe(dataframes.get('cafeterias_raw', pd.DataFrame()), search_value)
         return filtered_df.to_dict('records')
 
     # Callback para filtrar Ingredientes
@@ -1512,11 +1839,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
     )
     def actualizar_tabla_ingredientes(valor_busqueda):
         if valor_busqueda:
-            df_filtrado = dataframes.get('ingredientes', pd.DataFrame()).astype(str).apply(
-                lambda fila: fila.str.contains(valor_busqueda, case=False, na=False).any(),
-                axis=1
-            )
-            return dataframes.get('ingredientes', pd.DataFrame())[df_filtrado].to_dict('records')
+            filtered_df = filter_dataframe(dataframes.get('ingredientes', pd.DataFrame()), valor_busqueda)
+            return filtered_df.to_dict('records')
         return dataframes.get('ingredientes', pd.DataFrame()).to_dict('records')
 
     # Callback para filtrar Instituciones
@@ -1526,11 +1850,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
     )
     def actualizar_tabla_instituciones(valor_busqueda):
         if valor_busqueda:
-            df_filtrado = dataframes.get('instituciones', pd.DataFrame()).astype(str).apply(
-                lambda fila: fila.str.contains(valor_busqueda, case=False, na=False).any(),
-                axis=1
-            )
-            return dataframes.get('instituciones', pd.DataFrame())[df_filtrado].to_dict('records')
+            filtered_df = filter_dataframe(dataframes.get('instituciones', pd.DataFrame()), valor_busqueda)
+            return filtered_df.to_dict('records')
         return dataframes.get('instituciones', pd.DataFrame()).to_dict('records')
 
     # Callback para filtrar Productos (Tabla de Productos en Pestaña 8)
@@ -1540,11 +1861,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
     )
     def actualizar_tabla_productos_main(valor_busqueda):
         if valor_busqueda:
-            df_filtrado = dataframes.get('productos', pd.DataFrame()).astype(str).apply(
-                lambda fila: fila.str.contains(valor_busqueda, case=False, na=False).any(),
-                axis=1
-            )
-            return dataframes.get('productos', pd.DataFrame())[df_filtrado].to_dict('records')
+            filtered_df = filter_dataframe(dataframes.get('productos', pd.DataFrame()), valor_busqueda)
+            return filtered_df.to_dict('records')
         return dataframes.get('productos', pd.DataFrame()).to_dict('records')
 
     # --------------------------------
@@ -1561,31 +1879,57 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks > 0:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                workbook = writer.book
+
                 # Hoja 1: Órdenes
-                dataframes.get('ordenes', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Órdenes')
+                sheet_name = 'Órdenes'
+                dataframes.get('ordenes_display', pd.DataFrame()).to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes.get('ordenes_display', pd.DataFrame())
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaÓrdenes',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Hoja 2: Órdenes Completadas
-                dataframes.get('ordenes_completadas', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Órdenes Completadas')
+                sheet_name = 'Órdenes Completadas'
+                dataframes.get('ordenes_completadas_display', pd.DataFrame()).to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes.get('ordenes_completadas_display', pd.DataFrame())
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaOrdenesCompletadas',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Hoja 3: Volumen de pedidos por fecha
                 if 'df_count' in dataframes:
-                    dataframes['df_count'].to_excel(writer, index=False, sheet_name='Volumen de pedidos por fecha')
+                    sheet_name = 'Volumen de pedidos por fecha'
+                    dataframes['df_count'].to_excel(writer, index=False, sheet_name=sheet_name)
+                    worksheet = writer.sheets[sheet_name]
+                    df = dataframes['df_count']
+                    num_rows, num_cols = df.shape
+                    worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                        'columns': [{'header': col} for col in df.columns],
+                        'name': 'TablaVolumenPedidos',
+                        'style': 'Table Style Medium 9'
+                    })
 
                 # Hoja 4: Popularidad del producto
                 if 'df_product_popularity' in dataframes:
-                    dataframes['df_product_popularity'].to_excel(writer, index=False, sheet_name='Popularidad del producto')
-
-                # Hoja 5: Ingresos por institución
-                if 'df_revenue_institution' in dataframes:
-                    dataframes['df_revenue_institution'].to_excel(writer, index=False, sheet_name='Ingresos por institución')
-
-                # Hoja 6: Para llevar vs en sitio
-                if 'df_order_type' in dataframes:
-                    dataframes['df_order_type'].to_excel(writer, index=False, sheet_name='Para llevar o en el lugar')
-
-                # Hoja 7: Horas punta
-                if 'df_peak_hours' in dataframes:
-                    dataframes['df_peak_hours'].to_excel(writer, index=False, sheet_name='Horas punta')
+                    sheet_name = 'Popularidad del producto'
+                    dataframes['df_product_popularity'].to_excel(writer, index=False, sheet_name=sheet_name)
+                    worksheet = writer.sheets[sheet_name]
+                    df = dataframes['df_product_popularity']
+                    num_rows, num_cols = df.shape
+                    worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                        'columns': [{'header': col} for col in df.columns],
+                        'name': 'TablaPopularidadProducto',
+                        'style': 'Table Style Medium 9'
+                    })
 
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), "ordenes_segmentadas.xlsx")
@@ -1600,7 +1944,17 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks > 0:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                dataframes.get('products', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Detalle de Productos')
+                workbook = writer.book
+                sheet_name = 'Detalle de Productos'
+                dataframes.get('products', pd.DataFrame()).to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['products']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaDetalleProductos',
+                    'style': 'Table Style Medium 9'
+                })
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), "detalle_productos.xlsx")
 
@@ -1614,8 +1968,17 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks > 0:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                workbook = writer.book
+                sheet_name = 'Productos'
                 df_productos = dataframes.get('productos', pd.DataFrame())
-                df_productos.to_excel(writer, index=False, sheet_name='Productos')
+                df_productos.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                num_rows, num_cols = df_productos.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df_productos.columns],
+                    'name': 'TablaProductos',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Estadísticas de Productos
                 estadisticas_productos = pd.DataFrame({
@@ -1625,7 +1988,16 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                     'Precio Máximo': [df_productos['precio_unitario'].max().round(3)],
                     'Precio Mínimo': [df_productos['precio_unitario'].min().round(3)]
                 })
-                estadisticas_productos.to_excel(writer, sheet_name='Estadísticas', index=False)
+                sheet_name = 'Estadísticas'
+                estadisticas_productos.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                num_rows, num_cols = estadisticas_productos.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in estadisticas_productos.columns],
+                    'name': 'TablaEstadisticasProductos',
+                    'style': 'Table Style Medium 9'
+                })
+
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), "productos.xlsx")
 
@@ -1639,7 +2011,17 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks > 0:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                dataframes.get('usuarios_app', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Usuarios_App')
+                workbook = writer.book
+                sheet_name = 'Usuarios_App'
+                dataframes.get('usuarios_app', pd.DataFrame()).to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['usuarios_app']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaUsuariosApp',
+                    'style': 'Table Style Medium 9'
+                })
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), "usuarios_app.xlsx")
 
@@ -1653,7 +2035,17 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks > 0:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                dataframes.get('usuarios', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Usuarios')
+                workbook = writer.book
+                sheet_name = 'Usuarios'
+                dataframes.get('usuarios', pd.DataFrame()).to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                df = dataframes['usuarios']
+                num_rows, num_cols = df.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df.columns],
+                    'name': 'TablaUsuarios',
+                    'style': 'Table Style Medium 9'
+                })
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), "usuarios.xlsx")
 
@@ -1667,20 +2059,60 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks > 0:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                dataframes.get('cafeterias', pd.DataFrame()).to_excel(writer, index=False, sheet_name='Resumen Cafeterías')
+                workbook = writer.book
+                sheet_name = 'Resumen Cafeterías'
+                df_cafeterias = dataframes.get('cafeterias', pd.DataFrame())
+                df_cafeterias.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                num_rows, num_cols = df_cafeterias.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df_cafeterias.columns],
+                    'name': 'TablaResumenCafeterias',
+                    'style': 'Table Style Medium 9'
+                })
 
                 # Formatear las columnas de monto
-                workbook = writer.book
-                worksheet = writer.sheets['Resumen Cafeterías']
                 money_format = workbook.add_format({'num_format': '$#,##0.000'})
 
-                # Asumiendo que las columnas de monto están en B, D, E, F, G, H
-                # Columnas: Cafeterias, Monto con Tasa, Tasa Total, Monto sin Tasa, Total VALOR NETO, Total 2.5% TOMADO, Total VALOR DISPERSIÓN FINAL
-                # Índices Excel: A, B, C, D, E, F, G
-                worksheet.set_column('B:G', 20, money_format)
+                # Ajusta las columnas según el orden final del DataFrame
+                for idx, col in enumerate(df_cafeterias.columns):
+                    if col != 'Cafeterias':
+                        worksheet.set_column(idx, idx, 20, money_format)
 
             buffer.seek(0)
-            return dcc.send_bytes(buffer.read(), f"{current_month}WompiCafeterias.xlsx")
+            # Obtener el nombre del primer mes para el nombre del archivo
+            if not df_cafeterias.empty:
+                first_cafeteria = df_cafeterias.iloc[0]['Cafeterias']
+                first_month = first_cafeteria.split()[0]
+                return dcc.send_bytes(buffer.read(), f"Resumen_Cafeterias_{first_month}.xlsx")
+            else:
+                return dcc.send_bytes(buffer.read(), "Resumen_Cafeterias.xlsx")
+
+    # Callback para descargar Cafeterías DB
+    @app.callback(
+        Output("download-cafeterias-db", "data"),
+        Input("btn-download-cafeterias-db", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def download_cafeterias_db(n_clicks):
+        if n_clicks > 0:
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                workbook = writer.book
+
+                # Hoja 1: Instituciones
+                sheet_name = 'Cafeterias DB'
+                df_cafeterias_db = dataframes.get('cafeterias_raw', pd.DataFrame())
+                df_cafeterias_db.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                num_rows, num_cols = df_cafeterias_db.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df_cafeterias_db.columns],
+                    'name': 'TablaCafeteriasDB',
+                    'style': 'Table Style Medium 9'
+                })
+            buffer.seek(0)
+            return dcc.send_bytes(buffer.read(), "cafeterias_db.xlsx")
 
     # Callback para descargar Ingredientes
     @app.callback(
@@ -1692,14 +2124,33 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                workbook = writer.book
+                sheet_name = 'Ingredientes'
                 df_ingredientes = dataframes.get('ingredientes', pd.DataFrame())
-                df_ingredientes.to_excel(writer, index=False, sheet_name='Ingredientes')
+                df_ingredientes.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                num_rows, num_cols = df_ingredientes.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df_ingredientes.columns],
+                    'name': 'TablaIngredientes',
+                    'style': 'Table Style Medium 9'
+                })
 
-                # Análisis Opciones
+                # Hoja 2: Análisis Opciones
                 columnas_opciones = [col for col in df_ingredientes.columns if 'opcion_' in col]
                 if columnas_opciones:
-                    analisis_opciones = df_ingredientes[columnas_opciones].notna().sum()
-                    analisis_opciones.to_frame('Cantidad de Opciones').to_excel(writer, sheet_name='Análisis Opciones')
+                    sheet_name = 'Análisis Opciones'
+                    analisis_opciones = dataframes['ingredientes'][columnas_opciones].notna().sum().reset_index()
+                    analisis_opciones.columns = ['Opción', 'Cantidad de Opciones']
+                    analisis_opciones.to_excel(writer, index=False, sheet_name=sheet_name)
+                    worksheet = writer.sheets[sheet_name]
+                    num_rows, num_cols = analisis_opciones.shape
+                    worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                        'columns': [{'header': col} for col in analisis_opciones.columns],
+                        'name': 'TablaAnalisisOpciones',
+                        'style': 'Table Style Medium 9'
+                    })
+
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), "ingredientes.xlsx")
 
@@ -1713,12 +2164,32 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
         if n_clicks:
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df_instituciones = dataframes.get('instituciones', pd.DataFrame())
-                df_instituciones.to_excel(writer, index=False, sheet_name='Instituciones')
+                workbook = writer.book
 
-                # Análisis por Ciudad
-                inst_stats = df_instituciones.groupby(['ciudad', 'is_active']).size().unstack(fill_value=0)
-                inst_stats.to_excel(writer, sheet_name='Análisis por Ciudad')
+                # Hoja 1: Instituciones
+                sheet_name = 'Instituciones'
+                df_instituciones = dataframes.get('instituciones', pd.DataFrame())
+                df_instituciones.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets[sheet_name]
+                num_rows, num_cols = df_instituciones.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in df_instituciones.columns],
+                    'name': 'TablaInstituciones',
+                    'style': 'Table Style Medium 9'
+                })
+
+                # Hoja 2: Análisis por Ciudad
+                sheet_name = 'Análisis por Ciudad'
+                inst_stats = dataframes['instituciones'].groupby(['ciudad', 'is_active']).size().unstack(fill_value=0).reset_index()
+                inst_stats.to_excel(writer, index=False, sheet_name=sheet_name)
+                worksheet = writer.sheets['Análisis por Ciudad']
+                num_rows, num_cols = inst_stats.shape
+                worksheet.add_table(0, 0, num_rows, num_cols - 1, {
+                    'columns': [{'header': col} for col in inst_stats.columns],
+                    'name': 'TablaAnalisisCiudad',
+                    'style': 'Table Style Medium 9'
+                })
+
             buffer.seek(0)
             return dcc.send_bytes(buffer.read(), "instituciones.xlsx")
 
@@ -1754,6 +2225,10 @@ def main():
     df_instituciones = pd.DataFrame(datos_instituciones)
     df_productos = pd.DataFrame(datos_productos)
 
+    # Convertir Decimal a float en ordenes antes de procesar
+    if not df_ordenes.empty:
+        df_ordenes = df_ordenes.apply(lambda col: col.map(convertir_decimal) if col.dtype == object else col)
+
     # Procesamiento de df_ordenes (primer script)
     df_ordenes = process_ordenes_data(df_ordenes)
 
@@ -1773,14 +2248,18 @@ def main():
     df_productos = convertir_columnas_numericas_productos(df_productos)
 
     # Convertir Decimal a float en ingredientes y productos (segundo script)
-    df_ingredientes = df_ingredientes.applymap(convertir_decimal)
-    df_productos = df_productos.applymap(convertir_decimal)
+    # Reemplazar applymap con apply y map para evitar FutureWarnings
+    if not df_ingredientes.empty:
+        df_ingredientes = df_ingredientes.apply(lambda col: col.map(convertir_decimal) if col.dtype == object else col)
+
+    if not df_productos.empty:
+        df_productos = df_productos.apply(lambda col: col.map(convertir_decimal) if col.dtype == object else col)
 
     # Crear figuras basadas en órdenes completadas y otras tablas
     figures_and_data = create_figures_integrado(df_ordenes_completadas, df_products, df_usuarios, df_usuarios_app, df_instituciones)
 
     # Crear un diccionario de dataframes
-    dataframes = {
+    dataframes_dict = {
         'ordenes': df_ordenes,  # Todas las órdenes
         'ordenes_completadas': df_ordenes_completadas,  # Solo órdenes completadas
         'products': df_products,
@@ -1789,28 +2268,51 @@ def main():
         'cafeterias': df_cafeterias_resumen,  # Resumen por cafeterías
         'ingredientes': df_ingredientes,
         'instituciones': df_instituciones,
-        'productos': df_productos
+        'productos': df_productos,
+        'cafeterias_raw': df_cafeterias  # Datos raw de cafeterías
     }
+
+    # Crear DataFrames de visualización sin excluir columnas
+    df_ordenes_display = df_ordenes.copy()
+    df_ordenes_completadas_display = df_ordenes_completadas.copy()
+
+    # Convertir 'productos_json' a string en los DataFrames de visualización
+    df_ordenes_display['productos_json'] = df_ordenes_display['productos_json'].apply(
+        lambda x: json.dumps(convertir_decimal(x)) if isinstance(x, (dict, list)) else str(x)
+    )
+    df_ordenes_completadas_display['productos_json'] = df_ordenes_completadas_display['productos_json'].apply(
+        lambda x: json.dumps(convertir_decimal(x)) if isinstance(x, (dict, list)) else str(x)
+    )
+
+    # Añadir dataframes de visualización al diccionario
+    dataframes_dict['ordenes_display'] = df_ordenes_display
+    dataframes_dict['ordenes_completadas_display'] = df_ordenes_completadas_display
 
     # Añadir dataframes adicionales de figures_and_data
     for key, value in figures_and_data.items():
-        if key.startswith('df_'):
-            dataframes[key] = value
-        elif key.startswith('fig_'):
-            dataframes[key] = value
-
-    # Configurar la aplicación Dash
-    app = setup_dash_app_integrado(figures_and_data, dataframes)
+        if key.startswith('df_') or key.startswith('fig_'):
+            dataframes_dict[key] = value
 
     # Exportar todos los Excel antes de iniciar la aplicación
-    exportar_a_excel_integrado(dataframes)
+    exportar_a_excel_integrado(dataframes_dict)
+
+    # Llamar a las nuevas funciones para exportar órdenes completadas filtradas
+    export_ordenes_completadas_por_mes(df_ordenes_completadas)
+    export_ordenes_completadas_rango_fecha(df_ordenes_completadas)
+    
+    # Nueva llamada para exportar órdenes clasificadas por cafeterías
+    export_ordenes_completadas_por_cafeteria(df_ordenes_completadas)
 
     # Ejecutar la conversión completa si es necesario (función del primer script)
     convertir_completo()
 
+    # Configurar la aplicación Dash
+    app = setup_dash_app_integrado(figures_and_data, dataframes_dict)
+
     # Abrir el navegador automáticamente
     webbrowser.open('http://127.0.0.1:8050/')
     app.run_server(debug=True, use_reloader=False)
+    renombrar_hojas()
 
 if __name__ == '__main__':
     main()

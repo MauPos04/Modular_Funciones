@@ -1,5 +1,7 @@
 # Ignorar archivo específico de configuración
 config.py
+src/config/aws_config.py
+src/config/settings.py
 
 # Ignorar carpeta de excels exports y todo su contenido
 excel_exports/

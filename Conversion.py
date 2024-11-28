@@ -46,8 +46,8 @@ def convertir_completo():
         return df_sales
 
     # Uso del script
-    cafeterias_file = 'cafeterias.xlsx'
-    sales_file = 'NovemberWompiCafeterias.xlsx'
+    cafeterias_file = 'cafeterias_db.xlsx'
+    sales_file = 'NoviembreWompiCafeterias.xlsx'
 
     result = replace_ids_with_names(cafeterias_file, sales_file)
     if result is not None:
