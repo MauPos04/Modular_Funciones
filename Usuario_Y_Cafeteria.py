@@ -51,14 +51,14 @@ def configurar_aws():
     """
     tablas = {
         # Tablas del primer script
-        'ordenes': 'colosal-appu-ordenes-pdn',
-        'usuarios_app': 'colosal-appu-usuarios-app-pdn',
-        'usuarios': 'colosal-appu-usuarios-pdn',
-        'cafeterias': 'colosal-appu-cafeterias-pdn',
+        'ordenes': 'Appu-ordenes-pdn',
+        'usuarios_app': 'Appu-usuarios-app-pdn',
+        'usuarios': 'Appu-usuarios-pdn',
+        'cafeterias': 'Appu-cafeterias-pdn',
         # Tablas del segundo script
-        'ingredientes': 'colosal-appu-ingredientes-pdn',
-        'instituciones': 'colosal-appu-instituciones-pdn',
-        'productos': 'colosal-appu-productos-pdn'
+        'ingredientes': 'Appu-ingredientes-pdn',
+        'instituciones': 'Appu-instituciones-pdn',
+        'productos': 'Appu-productos-pdn'
     }
 
     dynamodb = boto3.resource(
@@ -320,12 +320,18 @@ def process_products_data(df_ordenes):
         # Procesar 'productos_json' para extraer las llaves requeridas
         df_ordenes_2 = df_ordenes[['id_orden', 'nombre_cliente', 'productos_json', 'fecha_creacion_str', 'hora_creacion', 'monto', 'VALOR PRODUCTO', 'VALOR NETO CAFETERIA']].copy()
 
-        # Definir una función segura para cargar JSON
+        # Definir una función segura para cargar JSON (actualizada)
         def safe_json_loads(x):
             if isinstance(x, str):
                 try:
-                    return json.loads(x)
+                    # Si la cadena comienza y termina con comillas, eliminarlas
+                    if x.startswith('"') and x.endswith('"'):
+                        x = x[1:-1]
+                    # Reemplazar comillas dobles duplicadas por una sola comilla doble
+                    x_fixed = x.replace('""', '"')
+                    return json.loads(x_fixed)
                 except json.JSONDecodeError:
+                    print(f"Error al parsear productos_json: {x}")
                     return []
             else:
                 return []
@@ -2305,6 +2311,7 @@ def main():
 
     # Ejecutar la conversión completa si es necesario (función del primer script)
     convertir_completo()
+    renombrar_hojas()
 
     # Configurar la aplicación Dash
     app = setup_dash_app_integrado(figures_and_data, dataframes_dict)
@@ -2312,7 +2319,7 @@ def main():
     # Abrir el navegador automáticamente
     webbrowser.open('http://127.0.0.1:8050/')
     app.run_server(debug=True, use_reloader=False)
-    renombrar_hojas()
+    
 
 if __name__ == '__main__':
     main()
