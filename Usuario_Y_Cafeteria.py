@@ -51,14 +51,14 @@ def configurar_aws():
     """
     tablas = {
         # Tablas del primer script
-        'ordenes': 'Appu-ordenes-pdn',
-        'usuarios_app': 'Appu-usuarios-app-pdn',
-        'usuarios': 'Appu-usuarios-pdn',
-        'cafeterias': 'Appu-cafeterias-pdn',
+        'ordenes': 'colosal-appu-ordenes-pdn',
+        'usuarios_app': 'colosal-appu-usuarios-app-pdn',
+        'usuarios': 'colosal-appu-usuarios-pdn',
+        'cafeterias': 'colosal-appu-cafeterias-pdn',
         # Tablas del segundo script
-        'ingredientes': 'Appu-ingredientes-pdn',
-        'instituciones': 'Appu-instituciones-pdn',
-        'productos': 'Appu-productos-pdn'
+        'ingredientes': 'colosal-appu-ingredientes-pdn',
+        'instituciones': 'colosal-appu-instituciones-pdn',
+        'productos': 'colosal-appu-productos-pdn'
     }
 
     dynamodb = boto3.resource(
@@ -278,8 +278,8 @@ def process_ordenes_data(df_ordenes):
             'fecha_terminacion_str', # Usar la cadena formateada
             'celular_cliente',
             'comprobante_pago',
-            'observacion',
-            'cafeteria_id'  # Campo adicional requerido
+            'observacion'
+            # 'cafeteria_id'  # Campo adicional requerido
             # Añade aquí cualquier otro campo que desees mantener
         ]
 
