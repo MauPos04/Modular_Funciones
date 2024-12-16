@@ -51,14 +51,14 @@ def configurar_aws():
     """
     tablas = {
         # Tablas del primer script
-        'ordenes': 'colosal-appu-ordenes-pdn',
-        'usuarios_app': 'colosal-appu-usuarios-app-pdn',
-        'usuarios': 'colosal-appu-usuarios-pdn',
-        'cafeterias': 'colosal-appu-cafeterias-pdn',
+        'ordenes': 'Appu-ordenes-pdn',
+        'usuarios_app': 'Appu-usuarios-app-pdn',
+        'usuarios': 'Appu-usuarios-pdn',
+        'cafeterias': 'Appu-cafeterias-pdn',
         # Tablas del segundo script
-        'ingredientes': 'colosal-appu-ingredientes-pdn',
-        'instituciones': 'colosal-appu-instituciones-pdn',
-        'productos': 'colosal-appu-productos-pdn'
+        'ingredientes': 'Appu-ingredientes-pdn',
+        'instituciones': 'Appu-instituciones-pdn',
+        'productos': 'Appu-productos-pdn'
     }
 
     dynamodb = boto3.resource(
