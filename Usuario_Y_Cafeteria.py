@@ -190,10 +190,10 @@ def process_ordenes_data(df_ordenes):
         df_ordenes['monto'] = pd.to_numeric(df_ordenes['monto'], errors='coerce')
         df_ordenes['tasa'] = pd.to_numeric(df_ordenes['tasa'], errors='coerce')
 
-        # Convertir columnas de fecha/hora a datetime sin especificar formato para inferencia automática
+        # Convertir columnas de fecha/hora a datetime especificando el formato para 'hora_recogida'
         df_ordenes['fecha_creacion_dt'] = pd.to_datetime(df_ordenes['fecha_creacion'], errors='coerce')
         df_ordenes['fecha_terminacion_dt'] = pd.to_datetime(df_ordenes['fecha_terminacion'], errors='coerce')
-        df_ordenes['hora_recogida_dt'] = pd.to_datetime(df_ordenes['hora_recogida'], errors='coerce').dt.time
+        df_ordenes['hora_recogida_dt'] = pd.to_datetime(df_ordenes['hora_recogida'], format='%H:%M:%S', errors='coerce').dt.time  # Especifica el formato aquí
 
         # Crear columna 'hora_creacion' extrayendo la hora
         df_ordenes['hora_creacion'] = df_ordenes['fecha_creacion_dt'].dt.strftime('%H:%M:%S')
@@ -242,6 +242,25 @@ def process_ordenes_data(df_ordenes):
             df_ordenes['COMISION APPU-CAFETERIA']
         ).round(3)
 
+        # Añadir las nuevas columnas con manejo adecuado de valores faltantes
+        # Pago Usuario
+        if 'pago_usuario' not in df_ordenes.columns:
+            df_ordenes['pago_usuario'] = 0
+        else:
+            df_ordenes['pago_usuario'] = pd.to_numeric(df_ordenes['pago_usuario'], errors='coerce').fillna(0).round(3)
+
+        # Porcentaje Usuario
+        if 'porcentaje_usuario' not in df_ordenes.columns:
+            df_ordenes['porcentaje_usuario'] = 0
+        else:
+            df_ordenes['porcentaje_usuario'] = pd.to_numeric(df_ordenes['porcentaje_usuario'], errors='coerce').fillna(0).round(3)
+
+        # Estado Crédito
+        if 'estado_credito' not in df_ordenes.columns:
+            df_ordenes['estado_credito'] = 'Desconocido'
+        else:
+            df_ordenes['estado_credito'] = df_ordenes['estado_credito'].astype(str)
+
         # Ordenar el DataFrame por 'fecha_creacion_dt' y 'hora_recogida_dt'
         df_ordenes = df_ordenes.sort_values(by=['fecha_creacion_dt', 'hora_recogida_dt'], ascending=[False, False])
 
@@ -278,7 +297,10 @@ def process_ordenes_data(df_ordenes):
             'fecha_terminacion_str', # Usar la cadena formateada
             'celular_cliente',
             'comprobante_pago',
-            'observacion'
+            'observacion',
+            'pago_usuario',          # Nueva columna
+            'porcentaje_usuario',    # Nueva columna
+            'estado_credito'         # Nueva columna
             # 'cafeteria_id'  # Campo adicional requerido
             # Añade aquí cualquier otro campo que desees mantener
         ]
@@ -305,6 +327,7 @@ def process_ordenes_data(df_ordenes):
         )
 
     return df_ordenes
+
 
 def process_products_data(df_ordenes):
     """
@@ -433,7 +456,10 @@ def process_cafeterias_data(df_ordenes_completadas):
         'COMISION-WOMPI': 'sum',
         'VALOR RETEFUENTE CAFETERIA': 'sum',
         'VALOR RTE ICA CAFETERIA': 'sum',
-        'VALOR NETO CAFETERIA': 'sum'
+        'VALOR NETO CAFETERIA': 'sum',
+        'pago_usuario': 'sum',             # Nueva columna
+        'porcentaje_usuario': 'mean',      # Nueva columna (promedio)
+        'estado_credito': lambda x: x.mode()[0] if not x.mode().empty else 'Desconocido'  # Nueva columna (modo)
     }
 
     df_cafeterias_summary = df_cafeterias.groupby('cafeteria').agg(aggregation_columns).reset_index()
@@ -464,7 +490,9 @@ def process_cafeterias_data(df_ordenes_completadas):
         'VALOR RETEFUENTE CAFETERIA': [df_cafeterias_summary['VALOR RETEFUENTE CAFETERIA'].sum()],
         'VALOR RTE ICA CAFETERIA': [df_cafeterias_summary['VALOR RTE ICA CAFETERIA'].sum()],
         'VALOR NETO CAFETERIA': [df_cafeterias_summary['VALOR NETO CAFETERIA'].sum()],
-        'monto_sin_tasa': [df_cafeterias_summary['monto_sin_tasa'].sum()]
+        'pago_usuario': [df_cafeterias_summary['pago_usuario'].sum()],              # Nueva columna
+        'porcentaje_usuario': [df_cafeterias_summary['porcentaje_usuario'].mean()],  # Nueva columna
+        'estado_credito': ['-']                                                        # Nueva columna
     })
 
     df_cafeterias_summary = pd.concat([df_cafeterias_summary, total_row], ignore_index=True)
@@ -489,7 +517,10 @@ def process_cafeterias_data(df_ordenes_completadas):
         'COMISION-WOMPI': 'Total COMISION-WOMPI',
         'VALOR RETEFUENTE CAFETERIA': 'Total VALOR RETEFUENTE CAFETERIA',
         'VALOR RTE ICA CAFETERIA': 'Total VALOR RTE ICA CAFETERIA',
-        'VALOR NETO CAFETERIA': 'Total VALOR NETO CAFETERIA'
+        'VALOR NETO CAFETERIA': 'Total VALOR NETO CAFETERIA',
+        'pago_usuario': 'Pago Usuario',                 # Nueva columna
+        'porcentaje_usuario': 'Porcentaje Usuario',     # Nueva columna
+        'estado_credito': 'Estado Crédito'              # Nueva columna
     })
 
     # 10. Seleccionar y reordenar columnas finales
@@ -502,7 +533,8 @@ def process_cafeterias_data(df_ordenes_completadas):
         'Total VALOR PRODUCTO', 'Total VALOR COMISION CAFETERIA',
         'Total COMISION APPU-CAFETERIA', 'Total COMISION-WOMPI',
         'Total VALOR RETEFUENTE CAFETERIA', 'Total VALOR RTE ICA CAFETERIA',
-        'Total VALOR NETO CAFETERIA'
+        'Total VALOR NETO CAFETERIA',
+        'Pago Usuario', 'Porcentaje Usuario', 'Estado Crédito'
     ]
 
     # Verificar que todas las columnas existan
@@ -524,7 +556,8 @@ def process_cafeterias_data(df_ordenes_completadas):
         'Total VALOR PRODUCTO', 'Total VALOR COMISION CAFETERIA',
         'Total COMISION APPU-CAFETERIA', 'Total COMISION-WOMPI',
         'Total VALOR RETEFUENTE CAFETERIA', 'Total VALOR RTE ICA CAFETERIA',
-        'Total VALOR NETO CAFETERIA'
+        'Total VALOR NETO CAFETERIA',
+        'Pago Usuario', 'Porcentaje Usuario'
     ]
 
     df_cafeterias_summary[numeric_columns] = df_cafeterias_summary[numeric_columns].round(3)
@@ -685,7 +718,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
     try:
         # 1. Exportar Órdenes con segmentaciones
         if 'ordenes_display' in dataframes and 'ordenes_completadas_display' in dataframes:
-            filename = f'ordenes_segmentadas.xlsx'
+            filename = f'ordenes_segmentadas{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -744,7 +777,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 2. Exportar Detalle de Productos
         if 'products' in dataframes:
-            filename = f'detalle_productos.xlsx'
+            filename = f'detalle_productos{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -762,7 +795,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 3. Exportar Usuarios App
         if 'usuarios_app' in dataframes:
-            filename = f'usuarios_app.xlsx'
+            filename = f'usuarios_app{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -780,7 +813,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 4. Exportar Usuarios
         if 'usuarios' in dataframes:
-            filename = f'usuarios.xlsx'
+            filename = f'usuarios{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -798,7 +831,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 5. Exportar Resumen de Cafeterías
         if 'cafeterias' in dataframes:
-            filename = f'{current_month}WompiCafeterias.xlsx'
+            filename = f'{current_month}WompiCafeterias{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
 
             df_cafeterias = dataframes.get('cafeterias', pd.DataFrame())
@@ -830,7 +863,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 6. Exportar Ingredientes
         if 'ingredientes' in dataframes:
-            filename = f'ingredientes.xlsx'
+            filename = f'ingredientes{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -866,7 +899,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
 
         # 7. Exportar Instituciones
         if 'instituciones' in dataframes:
-            filename = f'instituciones.xlsx'
+            filename = f'instituciones{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -895,11 +928,9 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                     'style': 'Table Style Medium 9'
                 })
 
-            generated_files['instituciones'] = excel_path
-
         # 8. Exportar Productos
         if 'productos' in dataframes:
-            filename = f'productos.xlsx'
+            filename = f'productos{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -934,11 +965,9 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                     'style': 'Table Style Medium 9'
                 })
 
-            generated_files['productos'] = excel_path
-
         # 9. Exportar Cafeterias Raw (Renombrado a cafeterias_db)
         if 'cafeterias_raw' in dataframes:
-            filename = f'cafeterias_db.xlsx'
+            filename = f'cafeterias_db{time_suffix}.xlsx'
             excel_path = os.path.join(output_dir, filename)
             with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
@@ -952,6 +981,7 @@ def exportar_a_excel_integrado(dataframes, output_dir='excel_exports', timestamp
                     'name': 'TablaCafeteriasDB',
                     'style': 'Table Style Medium 9'
                 })
+
             generated_files['cafeterias_raw'] = excel_path
 
         print("\nArchivos Excel generados exitosamente:")
@@ -1396,7 +1426,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                                     'VALOR COMISION APPU', 'VALOR RETEFUENTE APPU', 'VALOR RTE ICA APPU', 'GANANCIA NETO APPU',
                                                     'VALOR PRODUCTO', 'VALOR COMISION CAFETERIA', 'COMISION APPU-CAFETERIA',
                                                     'COMISION-WOMPI', 'VALOR RETEFUENTE CAFETERIA', 'VALOR RTE ICA CAFETERIA',
-                                                    'VALOR NETO CAFETERIA']
+                                                    'VALOR NETO CAFETERIA', 'Pago Usuario', 'Porcentaje Usuario']
                                         if col in dataframes.get('ordenes_display', pd.DataFrame()).columns
                                 ],
                                 style_header={
@@ -1440,7 +1470,7 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                                     'VALOR COMISION APPU', 'VALOR RETEFUENTE APPU', 'VALOR RTE ICA APPU', 'GANANCIA NETO APPU',
                                                     'VALOR PRODUCTO', 'VALOR COMISION CAFETERIA', 'COMISION APPU-CAFETERIA',
                                                     'COMISION-WOMPI', 'VALOR RETEFUENTE CAFETERIA', 'VALOR RTE ICA CAFETERIA',
-                                                    'VALOR NETO CAFETERIA']
+                                                    'VALOR NETO CAFETERIA', 'Pago Usuario', 'Porcentaje Usuario']
                                         if col in dataframes.get('ordenes_completadas_display', pd.DataFrame()).columns
                                 ],
                                 style_header={
@@ -1635,7 +1665,8 @@ def setup_dash_app_integrado(figures_and_data, dataframes):
                                         'Total VALOR PRODUCTO', 'Total VALOR COMISION CAFETERIA',
                                         'Total COMISION APPU-CAFETERIA', 'Total COMISION-WOMPI',
                                         'Total VALOR RETEFUENTE CAFETERIA', 'Total VALOR RTE ICA CAFETERIA',
-                                        'Total VALOR NETO CAFETERIA']
+                                        'Total VALOR NETO CAFETERIA',
+                                        'Pago Usuario', 'Porcentaje Usuario']
                                 if col in dataframes.get('cafeterias', pd.DataFrame()).columns
                         ],
                     ),
@@ -2322,4 +2353,4 @@ def main():
     
 
 if __name__ == '__main__':
-    main()
+    main() 
